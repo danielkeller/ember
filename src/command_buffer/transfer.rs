@@ -42,7 +42,7 @@ impl<'a> CommandRecording<'a> {
         unsafe {
             (self.pool.device.fun.cmd_fill_buffer)(
                 self.buffer.handle.borrow_mut(),
-                dst.handle(),
+                dst.borrow(),
                 offset,
                 size,
                 data,
@@ -67,8 +67,8 @@ impl<'a> CommandRecording<'a> {
         unsafe {
             (self.pool.device.fun.cmd_copy_buffer)(
                 self.buffer.handle.borrow_mut(),
-                src.handle(),
-                dst.handle(),
+                src.borrow(),
+                dst.borrow(),
                 regions.len() as u32,
                 Array::from_slice(regions).ok_or(Error::InvalidArgument)?,
             );
@@ -106,8 +106,8 @@ impl<'a> CommandRecording<'a> {
         unsafe {
             (self.pool.device.fun.cmd_copy_buffer_to_image)(
                 self.buffer.handle.borrow_mut(),
-                src.handle(),
-                dst.handle(),
+                src.borrow(),
+                dst.borrow(),
                 dst_layout,
                 regions.len() as u32,
                 Array::from_slice(regions).ok_or(Error::InvalidArgument)?,
@@ -152,9 +152,9 @@ impl<'a> CommandRecording<'a> {
         unsafe {
             (self.pool.device.fun.cmd_blit_image)(
                 self.buffer.handle.borrow_mut(),
-                src.handle(),
+                src.borrow(),
                 src_layout,
-                dst.handle(),
+                dst.borrow(),
                 dst_layout,
                 regions.len() as u32,
                 Array::from_slice(regions).ok_or(Error::InvalidArgument)?,
@@ -177,7 +177,7 @@ impl<'a> CommandRecording<'a> {
         unsafe {
             (self.pool.device.fun.cmd_clear_color_image)(
                 self.buffer.handle.borrow_mut(),
-                image.handle(),
+                image.borrow(),
                 layout,
                 &color,
                 ranges.len() as u32,

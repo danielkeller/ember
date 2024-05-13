@@ -113,7 +113,7 @@ impl<'i> Device<'i> {
 
 impl Device<'_> {
     /// Borrows the inner Vulkan handle.
-    pub fn handle(&self) -> Ref<VkDevice> {
+    pub fn borrow(&self) -> Ref<VkDevice> {
         self.handle.borrow()
     }
     /// Returns the limits of the device.

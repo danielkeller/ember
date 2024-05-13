@@ -36,7 +36,7 @@ impl<'d> Semaphore<'d> {
         let mut handle = None;
         unsafe {
             (device.fun.create_semaphore)(
-                device.handle(),
+                device.borrow(),
                 &Default::default(),
                 None,
                 &mut handle,
@@ -74,7 +74,7 @@ impl Drop for SemaphoreRAII<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_semaphore)(
-                self.device.handle(),
+                self.device.borrow(),
                 self.handle.borrow_mut(),
                 None,
             )

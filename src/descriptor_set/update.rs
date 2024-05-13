@@ -172,7 +172,7 @@ impl<'a> DescriptorSetUpdates<'a> {
         // }
         unsafe {
             (self.device.fun.update_descriptor_sets)(
-                self.device.handle(),
+                self.device.borrow(),
                 self.writes.len() as u32,
                 Array::from_slice(&self.writes),
                 self.copies.len() as u32,
@@ -260,7 +260,7 @@ impl<'a> DescriptorSetUpdate<'a> {
         let buffer_infos =
             self.updates.bump.alloc_slice_fill_iter(buffers.iter().map(|b| {
                 VkDescriptorBufferInfo {
-                    buffer: b.buffer.handle(),
+                    buffer: b.buffer.borrow(),
                     offset: b.offset,
                     range: b.range.unwrap_or(u64::MAX),
                 }

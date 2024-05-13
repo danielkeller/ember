@@ -116,9 +116,9 @@ impl<'d> PipelineLayout<'d> {
         let mut handle = None;
         unsafe {
             let set_layouts =
-                &set_layouts.iter().map(|l| l.handle()).collect::<Vec<_>>();
+                &set_layouts.iter().map(|l| l.borrow()).collect::<Vec<_>>();
             (device.fun.create_pipeline_layout)(
-                device.handle(),
+                device.borrow(),
                 &PipelineLayoutCreateInfo {
                     flags,
                     set_layouts: set_layouts.into(),
@@ -172,7 +172,7 @@ impl Drop for PipelineLayout<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_pipeline_layout)(
-                self.device.handle(),
+                self.device.borrow(),
                 self.handle.borrow_mut(),
                 None,
             )
@@ -322,7 +322,7 @@ impl<'d> Pipeline<'d> {
         let mut handle = MaybeUninit::uninit();
         unsafe {
             (info.layout.device.fun.create_graphics_pipelines)(
-                info.layout.device.handle(),
+                info.layout.device.borrow(),
                 info.cache.map(|c| c.handle.borrow()),
                 1,
                 std::array::from_ref(&vk_info).into(),
@@ -357,7 +357,7 @@ impl<'d> Pipeline<'d> {
         let mut handle = MaybeUninit::uninit();
         unsafe {
             (layout.device.fun.create_compute_pipelines)(
-                layout.device.handle(),
+                layout.device.borrow(),
                 cache.map(|c| c.handle.borrow()),
                 1,
                 std::array::from_ref(&info).into(),
@@ -376,7 +376,7 @@ impl<'d> Pipeline<'d> {
 
 impl Pipeline<'_> {
     /// Borrows the inner Vulkan handle.
-    pub fn handle(&self) -> Ref<VkPipeline> {
+    pub fn borrow(&self) -> Ref<VkPipeline> {
         self.handle.borrow()
     }
     /// Returns the pipeline layout.
@@ -400,7 +400,7 @@ impl Drop for Pipeline<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.layout.device.fun.destroy_pipeline)(
-                self.layout.device.handle(),
+                self.layout.device.borrow(),
                 self.handle.borrow_mut(),
                 None,
             )
@@ -447,7 +447,7 @@ impl<'d> PipelineCache<'d> {
             initial_data: data.into(),
         };
         (device.fun.create_pipeline_cache)(
-            device.handle(),
+            device.borrow(),
             &info,
             None,
             &mut handle,
@@ -462,14 +462,14 @@ impl<'d> PipelineCache<'d> {
         loop {
             unsafe {
                 (self.device.fun.get_pipeline_cache_data)(
-                    self.device.handle(),
+                    self.device.borrow(),
                     self.handle.borrow(),
                     &mut len,
                     None,
                 )?;
                 result.reserve(len);
                 let maybe_worked = (self.device.fun.get_pipeline_cache_data)(
-                    self.device.handle(),
+                    self.device.borrow(),
                     self.handle.borrow(),
                     &mut len,
                     ArrayMut::from_slice(result.spare_capacity_mut()),
@@ -492,7 +492,7 @@ impl Drop for PipelineCache<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_pipeline_cache)(
-                self.device.handle(),
+                self.device.borrow(),
                 self.handle.borrow_mut(),
                 None,
             )

@@ -37,7 +37,7 @@ impl<'d> Fence<'d> {
         let mut handle = None;
         unsafe {
             (device.fun.create_fence)(
-                device.handle(),
+                device.borrow(),
                 &Default::default(),
                 None,
                 &mut handle,
@@ -52,7 +52,7 @@ impl Drop for Fence<'_> {
         if let Some(handle) = &mut self.handle {
             unsafe {
                 (self.device.fun.destroy_fence)(
-                    self.device.handle(),
+                    self.device.borrow(),
                     handle.borrow_mut(),
                     None,
                 )
@@ -89,7 +89,7 @@ impl<'d> PendingFence<'d> {
     pub fn wait(mut self) -> Result<Fence<'d>> {
         unsafe {
             (self.device.fun.wait_for_fences)(
-                self.device.handle(),
+                self.device.borrow(),
                 1,
                 (&[self.handle.borrow()]).into(),
                 true.into(),
@@ -99,7 +99,7 @@ impl<'d> PendingFence<'d> {
         self.resources.cleanup();
         unsafe {
             (self.device.fun.reset_fences)(
-                self.device.handle(),
+                self.device.borrow(),
                 1,
                 // Safe because the the outer structure is owned here
                 (&[self.handle.borrow_mut()]).into(),

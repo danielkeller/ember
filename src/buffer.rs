@@ -40,7 +40,7 @@ impl<'d> BufferWithoutMemory<'d> {
         let mut handle = None;
         unsafe {
             (device.fun.create_buffer)(
-                device.handle(),
+                device.borrow(),
                 info,
                 None,
                 &mut handle,
@@ -75,7 +75,7 @@ impl<'d> Buffer<'d> {
     ) -> ResultAndSelf<Buffer<'d>, BufferWithoutMemory<'d>> {
         if let Err(err) = unsafe {
             (memory.device().fun.bind_buffer_memory)(
-                memory.device().handle(),
+                memory.device().borrow(),
                 inner.handle.borrow_mut(),
                 memory.handle(),
                 offset,
@@ -91,7 +91,7 @@ impl Drop for BufferWithoutMemory<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_buffer)(
-                self.device.handle(),
+                self.device.borrow(),
                 self.handle.borrow_mut(),
                 None,
             )
@@ -102,7 +102,7 @@ impl Drop for BufferWithoutMemory<'_> {
 #[allow(clippy::len_without_is_empty)]
 impl Buffer<'_> {
     /// Borrows the inner Vulkan handle.
-    pub fn handle(&self) -> Ref<VkBuffer> {
+    pub fn borrow(&self) -> Ref<VkBuffer> {
         self.inner.handle.borrow()
     }
     /// Returns the associated device.
@@ -140,7 +140,7 @@ impl<'d> BufferWithoutMemory<'d> {
         let mut result = Default::default();
         unsafe {
             (self.device.fun.get_buffer_memory_requirements)(
-                self.device.handle(),
+                self.device.borrow(),
                 self.handle.borrow(),
                 &mut result,
             );

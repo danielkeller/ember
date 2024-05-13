@@ -1615,7 +1615,7 @@ structure_type!(RenderPassBeginInfoType, 43);
 #[repr(C)]
 #[derive(Debug)]
 #[doc = crate::man_link!(VkBufferMemoryBarrier)]
-pub struct VkBufferMemoryBarrier<'a, Next = Null> {
+pub struct BufferMemoryBarrier<'a, Next = Null> {
     pub stype: BufferMemoryBarrierType,
     pub next: Next,
     pub src_access_mask: AccessFlags,
@@ -1631,7 +1631,7 @@ structure_type!(BufferMemoryBarrierType, 44);
 #[repr(C)]
 #[derive(Debug)]
 #[doc = crate::man_link!(VkImageMemoryBarrier)]
-pub struct VkImageMemoryBarrier<'a, Next = Null> {
+pub struct ImageMemoryBarrier<'a, Next = Null> {
     pub stype: ImageMemoryBarrierType,
     pub next: Next,
     pub src_access_mask: AccessFlags,

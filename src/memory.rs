@@ -44,7 +44,7 @@ impl<'d> DeviceMemory<'d> {
         let mut handle = None;
         let result = unsafe {
             (device.fun.allocate_memory)(
-                device.handle(),
+                device.borrow(),
                 &MemoryAllocateInfo {
                     stype: Default::default(),
                     next: Default::default(),
@@ -99,7 +99,7 @@ impl Drop for MemoryLifetime<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.free_memory)(
-                self.device.handle(),
+                self.device.borrow(),
                 self.handle.borrow_mut(),
                 None,
             )
@@ -146,7 +146,7 @@ impl<'d> DeviceMemory<'d> {
         let mut ptr = std::ptr::null_mut();
         unsafe {
             if let Err(err) = (inner.device.fun.map_memory)(
-                inner.device.handle(),
+                inner.device.borrow(),
                 inner.handle.borrow_mut(),
                 offset,
                 size as u64,
@@ -175,7 +175,7 @@ impl<'d> MappedMemory<'d> {
         let inner = &mut *self.memory.inner;
         unsafe {
             (inner.device.fun.unmap_memory)(
-                inner.device.handle(),
+                inner.device.borrow(),
                 inner.handle.borrow_mut(),
             )
         }

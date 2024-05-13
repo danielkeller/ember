@@ -6,6 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::borrow::Borrow;
+use std::usize;
+
 use crate::buffer::Buffer;
 use crate::descriptor_set::DescriptorSet;
 use crate::enums::*;
@@ -22,7 +25,7 @@ impl<'a> RenderPassRecording<'a> {
     /// Binds the pipeline to the appropriate bind point. The reference count of
     /// `pipeline` is incremented.
     #[doc = crate::man_link!(vkCmdBindPipeline)]
-    pub fn bind_pipeline(&mut self, pipeline: &Arc<Pipeline>) {
+    pub fn bind_pipeline(&mut self, pipeline: &'a Pipeline) {
         self.rec.bind_pipeline(pipeline)
     }
 }
@@ -31,7 +34,7 @@ impl<'a> SecondaryCommandRecording<'a> {
     /// Binds the pipeline to the appropriate bind point. The reference count of
     /// `pipeline` is incremented.
     #[doc = crate::man_link!(vkCmdBindPipeline)]
-    pub fn bind_pipeline(&mut self, pipeline: &Arc<Pipeline>) {
+    pub fn bind_pipeline(&mut self, pipeline: &'a Pipeline) {
         self.rec.bind_pipeline(pipeline)
     }
 }
@@ -40,23 +43,20 @@ impl<'a> CommandRecording<'a> {
     /// Binds the pipeline to the appropriate bind point. The reference count of
     /// `pipeline` is incremented.
     #[doc = crate::man_link!(vkCmdBindPipeline)]
-    pub fn bind_pipeline(&mut self, pipeline: &Arc<Pipeline>) {
+    pub fn bind_pipeline(&mut self, pipeline: &'a Pipeline) {
+        let bind_point;
         if pipeline.render_pass().is_some() {
-            self.graphics.pipeline = Some(pipeline.clone());
+            self.graphics.pipeline = Some(pipeline);
+            bind_point = PipelineBindPoint::GRAPHICS;
         } else {
-            self.compute.pipeline = Some(pipeline.clone());
+            self.compute.pipeline = Some(pipeline);
+            bind_point = PipelineBindPoint::COMPUTE;
         }
-        let bind_point = if pipeline.render_pass().is_some() {
-            PipelineBindPoint::GRAPHICS
-        } else {
-            PipelineBindPoint::COMPUTE
-        };
-        self.add_resource(pipeline.clone());
         unsafe {
             (self.pool.device.fun.cmd_bind_pipeline)(
-                self.buffer.handle.borrow_mut(),
+                self.buffer.borrow_mut(),
                 bind_point,
-                pipeline.handle(),
+                pipeline.borrow(),
             )
         }
     }
@@ -67,17 +67,18 @@ impl<'a> RenderPassRecording<'a> {
     /// [`Error::InvalidArgument`] if `buffers_offsets` is empty or the buffer
     /// usage flags don't include `VERTEX_BUFFER`.
     #[doc = crate::man_link!(vkCmdBindVertexBuffers)]
-    pub fn bind_vertex_buffers(
-        &mut self, first_binding: u32, buffers_offsets: &[(&Arc<Buffer>, u64)],
+    pub fn bind_vertex_buffers<const N: usize>(
+        &mut self, first_binding: u32, buffers: &[&'a Buffer; N],
+        offsets: &[u64; N],
     ) -> Result<()> {
-        self.rec.bind_vertex_buffers(first_binding, buffers_offsets)
+        self.rec.bind_vertex_buffers(first_binding, buffers, offsets)
     }
     /// Reference count of `buffer` is incremented. Returns
     /// [`Error::InvalidArgument`] if `buffer` does not have the `INDEX_BUFFER`
     /// usage flag.
     #[doc = crate::man_link!(vkCmdBindIndexBuffer)]
     pub fn bind_index_buffer(
-        &mut self, buffer: &Arc<Buffer>, offset: u64, index_type: IndexType,
+        &mut self, buffer: &'a Buffer, offset: u64, index_type: IndexType,
     ) -> Result<()> {
         self.rec.bind_index_buffer(buffer, offset, index_type)
     }
@@ -87,17 +88,18 @@ impl<'a> SecondaryCommandRecording<'a> {
     /// [`Error::InvalidArgument`] if `buffers_offsets` is empty or the buffer
     /// usage flags don't include `VERTEX_BUFFER`.
     #[doc = crate::man_link!(vkCmdBindVertexBuffers)]
-    pub fn bind_vertex_buffers(
-        &mut self, first_binding: u32, buffers_offsets: &[(&Arc<Buffer>, u64)],
+    pub fn bind_vertex_buffers<const N: usize>(
+        &mut self, first_binding: u32, buffers: &[&'a Buffer; N],
+        offsets: &[u64; N],
     ) -> Result<()> {
-        self.rec.bind_vertex_buffers(first_binding, buffers_offsets)
+        self.rec.bind_vertex_buffers(first_binding, buffers, offsets)
     }
     /// Reference count of `buffer` is incremented. Returns
     /// [`Error::InvalidArgument`] if `buffer` does not have the `INDEX_BUFFER`
     /// usage flag.
     #[doc = crate::man_link!(vkCmdBindIndexBuffer)]
     pub fn bind_index_buffer(
-        &mut self, buffer: &Arc<Buffer>, offset: u64, index_type: IndexType,
+        &mut self, buffer: &'a Buffer, offset: u64, index_type: IndexType,
     ) -> Result<()> {
         self.rec.bind_index_buffer(buffer, offset, index_type)
     }
@@ -107,32 +109,25 @@ impl<'a> CommandRecording<'a> {
     /// [`Error::InvalidArgument`] if `buffers_offsets` is empty or the buffer
     /// usage flags don't include `VERTEX_BUFFER`.
     #[doc = crate::man_link!(vkCmdBindVertexBuffers)]
-    pub fn bind_vertex_buffers(
-        &mut self, first_binding: u32, buffers_offsets: &[(&Arc<Buffer>, u64)],
+    pub fn bind_vertex_buffers<const N: usize>(
+        &mut self, first_binding: u32, buffers: &[&'a Buffer; N],
+        offsets: &[u64; N],
     ) -> Result<()> {
-        for &(buffer, _) in buffers_offsets {
+        for buffer in buffers {
             if !buffer.usage().contains(BufferUsageFlags::VERTEX_BUFFER) {
                 return Err(Error::InvalidArgument);
             }
         }
-        let buffers = self.scratch.alloc_slice_fill_iter(
-            buffers_offsets.iter().map(|&(b, _)| b.handle()),
-        );
-        let offsets = self.scratch.alloc_slice_fill_iter(
-            buffers_offsets.iter().map(|&(_, o)| o), //
-        );
+        let vkbuffers = &buffers.map(|b| b.borrow());
 
         unsafe {
             (self.pool.device.fun.cmd_bind_vertex_buffers)(
-                self.buffer.handle.borrow_mut(),
+                self.buffer.borrow_mut(),
                 first_binding,
-                buffers.len() as u32,
-                Array::from_slice(buffers).ok_or(Error::InvalidArgument)?,
-                Array::from_slice(offsets).ok_or(Error::InvalidArgument)?,
+                N as u32,
+                vkbuffers.into(),
+                offsets.into(),
             )
-        }
-        for &(buffer, _) in buffers_offsets {
-            self.add_resource(buffer.clone());
         }
         Ok(())
     }
@@ -141,16 +136,15 @@ impl<'a> CommandRecording<'a> {
     /// usage flag.
     #[doc = crate::man_link!(vkCmdBindIndexBuffer)]
     pub fn bind_index_buffer(
-        &mut self, buffer: &Arc<Buffer>, offset: u64, index_type: IndexType,
+        &mut self, buffer: &'a Buffer, offset: u64, index_type: IndexType,
     ) -> Result<()> {
         if !buffer.usage().contains(BufferUsageFlags::INDEX_BUFFER) {
             return Err(Error::InvalidArgument);
         }
-        self.add_resource(buffer.clone());
         unsafe {
             (self.pool.device.fun.cmd_bind_index_buffer)(
-                self.buffer.handle.borrow_mut(),
-                buffer.handle(),
+                self.buffer.borrow_mut(),
+                buffer.borrow(),
                 offset,
                 index_type,
             )
@@ -288,10 +282,10 @@ impl<'a> CommandRecording<'a> {
             self.add_resource(set.clone());
         }
         let sets =
-            self.scratch.alloc_slice_fill_iter(sets.iter().map(|s| s.handle()));
+            self.scratch.alloc_slice_fill_iter(sets.iter().map(|s| s.borrow()));
         unsafe {
             (self.pool.device.fun.cmd_bind_descriptor_sets)(
-                self.buffer.handle.borrow_mut(),
+                self.buffer.borrow_mut(),
                 pipeline_bind_point,
                 layout.handle(),
                 first_set,
@@ -348,7 +342,7 @@ impl<'a> CommandRecording<'a> {
         }
         unsafe {
             (self.pool.device.fun.cmd_push_constants)(
-                self.buffer.handle.borrow_mut(),
+                self.buffer.borrow_mut(),
                 layout.handle(),
                 stage_flags,
                 offset,

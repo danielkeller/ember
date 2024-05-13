@@ -52,7 +52,7 @@ impl<'d> Framebuffer<'d> {
         let mut handle = None;
         unsafe {
             (render_pass.device().fun.create_framebuffer)(
-                render_pass.device().handle(),
+                render_pass.device().borrow(),
                 &vk_create_info,
                 None,
                 &mut handle,
@@ -79,7 +79,7 @@ impl Drop for Framebuffer<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.render_pass.device.fun.destroy_framebuffer)(
-                self.render_pass.device.handle(),
+                self.render_pass.device.borrow(),
                 self.handle.borrow_mut(),
                 None,
             )

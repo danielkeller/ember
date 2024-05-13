@@ -45,6 +45,8 @@ pub mod ext;
 #[cfg(doc)]
 pub mod macos_instructions;
 
+use std::marker::PhantomData;
+
 use crate::error::Result;
 use crate::types::*;
 
@@ -68,6 +70,37 @@ macro_rules! spec_link {
     };
 }
 pub(crate) use spec_link;
+
+struct Pool;
+
+impl Pool {
+    fn allocate(&self) -> CmdBuf {
+        todo!()
+    }
+    fn reset(&mut self) {}
+}
+
+struct CmdBuf<'a>(PhantomData<&'a ()>);
+
+struct Object;
+
+impl<'a> CmdBuf<'a> {
+    fn record_thing(&mut self, _: &'a Object) {}
+}
+
+fn foo() {
+    let mut p = Pool;
+
+    let mut b = p.allocate();
+    let mut b1 = p.allocate();
+
+    let o = Object;
+    b.record_thing(&o);
+    b.record_thing(&Object);
+    drop(b);
+    b1.record_thing(&o);
+    p.reset();
+}
 
 #[doc = crate::man_link!(vkEnumerateInstanceExtensionProperties)]
 pub fn instance_extension_properties() -> Result<Vec<ExtensionProperties>> {

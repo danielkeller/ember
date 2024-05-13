@@ -265,7 +265,7 @@ impl<'a> CommandRecording<'a> {
         unsafe {
             (self.pool.device.fun.cmd_draw_indirect)(
                 self.buffer.handle.borrow_mut(),
-                buffer.handle(),
+                buffer.borrow(),
                 offset,
                 draw_count,
                 stride,
@@ -303,7 +303,7 @@ impl<'a> CommandRecording<'a> {
         unsafe {
             (self.pool.device.fun.cmd_draw_indexed_indirect)(
                 self.buffer.handle.borrow_mut(),
-                buffer.handle(),
+                buffer.borrow(),
                 offset,
                 draw_count,
                 stride,
@@ -338,7 +338,7 @@ impl<'a> CommandRecording<'a> {
         unsafe {
             (self.pool.device.fun.cmd_dispatch_indirect)(
                 self.buffer.handle.borrow_mut(),
-                buffer.handle(),
+                buffer.borrow(),
                 offset,
             );
         }
@@ -379,7 +379,7 @@ impl<'a> ExternalRenderPassRecording<'a> {
                 resources.push(res as Arc<_>);
             }
             // Check that the buffer is not in use.
-            handles.push(command.mut_handle()?);
+            handles.push(command.borrow_mut()?);
         }
 
         unsafe {

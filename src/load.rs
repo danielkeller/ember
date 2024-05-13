@@ -478,9 +478,9 @@ pub struct DeviceFn {
         u32,
         Option<Array<MemoryBarrier>>,
         u32,
-        Option<Array<VkBufferMemoryBarrier>>,
+        Option<Array<BufferMemoryBarrier>>,
         u32,
-        Option<Array<VkImageMemoryBarrier>>,
+        Option<Array<ImageMemoryBarrier>>,
     ),
     pub cmd_begin_render_pass: unsafe extern "system" fn(
         Mut<VkCommandBuffer>,
@@ -701,6 +701,6 @@ impl Device<'_> {
     /// function was not found.
     #[doc = crate::man_link!(vkGetDeviceProcAddr)]
     pub fn get_proc_addr(&self, name: &str) -> NonNull<c_void> {
-        self.instance().load(self.handle(), name)
+        self.instance().load(self.borrow(), name)
     }
 }

@@ -50,7 +50,7 @@ impl Device<'_> {
         let mut handle = None;
         unsafe {
             (self.fun.get_device_queue)(
-                self.handle(),
+                self.borrow(),
                 family_index,
                 queue_index,
                 &mut handle,
@@ -94,9 +94,9 @@ impl Drop for Queue<'_> {
 #[doc = crate::man_link!(VkSubmitInfo)]
 #[derive(Default)]
 pub struct SubmitInfo<'a> {
-    pub wait: &'a mut [(&'a mut Semaphore, PipelineStageFlags)],
-    pub commands: &'a mut [&'a mut CommandBuffer],
-    pub signal: &'a mut [&'a mut Semaphore],
+    pub wait: &'a mut [(&'a mut Semaphore<'a>, PipelineStageFlags)],
+    pub commands: &'a mut [&'a mut CommandBuffer<'a>],
+    pub signal: &'a mut [&'a mut Semaphore<'a>],
 }
 
 impl Queue<'_> {
@@ -147,7 +147,7 @@ impl Queue<'_> {
             for c in info.commands.iter_mut() {
                 info_recordings
                     .push(c.lock_resources().ok_or(Error::InvalidArgument)?);
-                commands.push(c.mut_handle()?);
+                commands.push(c.borrow_mut()?);
             }
             recordings.push(info_recordings);
             let wait_semaphores = scratch.alloc_slice_fill_iter(

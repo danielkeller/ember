@@ -111,7 +111,7 @@ impl<'d> SwapchainKHR<'d> {
         let mut handle = None;
         unsafe {
             (fun.create_swapchain_khr)(
-                device.handle(),
+                device.borrow(),
                 &VkSwapchainCreateInfoKHR {
                     stype: Default::default(),
                     next: Default::default(),
@@ -143,14 +143,14 @@ impl<'d> SwapchainKHR<'d> {
         let mut images = vec![];
         unsafe {
             (fun.get_swapchain_images_khr)(
-                device.handle(),
+                device.borrow(),
                 handle.borrow(),
                 &mut n_images,
                 None,
             )?;
             images.reserve(n_images as usize);
             (fun.get_swapchain_images_khr)(
-                device.handle(),
+                device.borrow(),
                 handle.borrow(),
                 &mut n_images,
                 ArrayMut::from_slice(images.spare_capacity_mut()),
@@ -190,7 +190,7 @@ impl Drop for SwapchainImages<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.fun.destroy_swapchain_khr)(
-                self.device.handle(),
+                self.device.borrow(),
                 self.handle.borrow_mut(),
                 None,
             )
@@ -229,7 +229,7 @@ impl<'i> SwapchainKHR<'i> {
         let res = &mut *self.res;
         let res = unsafe {
             (res.fun.acquire_next_image_khr)(
-                res.device.handle(),
+                res.device.borrow(),
                 res.handle.borrow_mut(),
                 timeout,
                 Some(signal.mut_handle()),
@@ -260,7 +260,7 @@ impl<'i> SwapchainKHR<'i> {
         let index = self
             .images
             .iter()
-            .position(|h| h.0.handle() == image.handle())
+            .position(|h| h.0.borrow() == image.borrow())
             .ok_or(Error::InvalidArgument)?;
         if wait.signaller.is_none() {
             return Err(Error::InvalidArgument);
