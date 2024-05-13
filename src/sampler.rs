@@ -13,15 +13,15 @@ use crate::types::*;
 /// A
 #[doc = crate::spec_link!("sampler", "13", "samplers")]
 #[derive(Debug, Eq)]
-pub struct Sampler {
+pub struct Sampler<'d> {
     handle: Handle<VkSampler>,
-    device: Arc<Device>,
+    device: &'d Device<'d>,
 }
 
-impl Sampler {
+impl<'d> Sampler<'d> {
     #[doc = crate::man_link!(vkCreateSampler)]
     pub fn new(
-        device: &Arc<Device>, info: &SamplerCreateInfo,
+        device: &'d Device, info: &SamplerCreateInfo,
     ) -> Result<Arc<Self>> {
         device.increment_sampler_alloc_count()?;
         let mut handle = None;
@@ -37,11 +37,11 @@ impl Sampler {
             device.decrement_sampler_alloc_count();
             result?
         }
-        Ok(Arc::new(Self { handle: handle.unwrap(), device: device.clone() }))
+        Ok(Arc::new(Self { handle: handle.unwrap(), device }))
     }
 }
 
-impl Drop for Sampler {
+impl Drop for Sampler<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_sampler)(
@@ -54,19 +54,19 @@ impl Drop for Sampler {
     }
 }
 
-impl PartialEq for Sampler {
+impl PartialEq for Sampler<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.handle == other.handle
     }
 }
 
-impl Sampler {
+impl Sampler<'_> {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkSampler> {
         self.handle.borrow()
     }
     /// Returns the associated device.
-    pub fn device(&self) -> &Arc<Device> {
-        &self.device
+    pub fn device(&self) -> &Device {
+        self.device
     }
 }

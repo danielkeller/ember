@@ -19,51 +19,49 @@ use std::fmt::Debug;
 /// An image with no memory. Call [`Image::new`] to bind memory and create an
 /// [`Image`].
 #[derive(Debug)]
-pub struct ImageWithoutMemory {
+pub struct ImageWithoutMemory<'d> {
     handle: Handle<VkImage>,
     format: Format,
     extent: Extent3D,
     mip_levels: u32,
     array_layers: u32,
     usage: ImageUsageFlags,
-    res: ImageOwner,
-    device: Arc<Device>,
+    res: ImageOwner<'d>,
+    device: &'d Device<'d>,
 }
 
 /// An
 #[doc = crate::spec_link!("image", "12", "resources-images")]
 /// with memory attached to it.
 #[derive(Debug)]
-pub struct Image {
-    inner: ImageWithoutMemory,
-    _memory: Option<Subobject<MemoryLifetime>>,
+pub struct Image<'d> {
+    inner: ImageWithoutMemory<'d>,
+    _memory: Option<Subobject<MemoryLifetime<'d>>>,
 }
 
 #[derive(Debug)]
-enum ImageOwner {
-    Swapchain(Subobject<SwapchainImages>),
+enum ImageOwner<'d> {
+    Swapchain(Subobject<SwapchainImages<'d>>),
     Application,
 }
 
-impl PartialEq for Image {
+impl PartialEq for Image<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.inner.device == other.inner.device
             && self.inner.handle == other.inner.handle
     }
 }
-impl Eq for Image {}
-impl std::hash::Hash for Image {
+impl Eq for Image<'_> {}
+impl std::hash::Hash for Image<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.inner.device.hash(state);
         self.inner.handle.hash(state);
     }
 }
 
-impl ImageWithoutMemory {
+impl<'d> ImageWithoutMemory<'d> {
     #[doc = crate::man_link!(vkCreateImage)]
-    pub fn new(
-        device: &Arc<Device>, info: &ImageCreateInfo<'_>,
-    ) -> Result<Self> {
+    pub fn new(device: &'d Device, info: &ImageCreateInfo<'_>) -> Result<Self> {
         let max_dim =
             info.extent.width.max(info.extent.height).max(info.extent.depth);
         if (info.image_type == ImageType::_1D
@@ -97,18 +95,19 @@ impl ImageWithoutMemory {
             array_layers: info.array_layers,
             usage: info.usage,
             res: ImageOwner::Application,
-            device: device.clone(),
+            device,
         })
     }
 }
-impl Image {
+
+impl<'d> Image<'d> {
     /// Note that it is an error to bind a storage image to
     /// host-visible memory when robust buffer access is not enabled.
     #[doc = crate::man_link!(vkBindImageMemory)]
     pub fn new(
-        image: ImageWithoutMemory, memory: &DeviceMemory, offset: u64,
-    ) -> ResultAndSelf<Arc<Self>, ImageWithoutMemory> {
-        assert_eq!(memory.device(), &image.device);
+        image: ImageWithoutMemory<'d>, memory: &DeviceMemory<'d>, offset: u64,
+    ) -> ResultAndSelf<Self, ImageWithoutMemory<'d>> {
+        assert_eq!(memory.device(), image.device);
         if !memory.check(offset, image.memory_requirements()) {
             return Err(ErrorAndSelf(Error::InvalidArgument, image));
         }
@@ -116,8 +115,9 @@ impl Image {
     }
 
     fn bind_image_impl(
-        mut inner: ImageWithoutMemory, memory: &DeviceMemory, offset: u64,
-    ) -> ResultAndSelf<Arc<Self>, ImageWithoutMemory> {
+        mut inner: ImageWithoutMemory<'d>, memory: &DeviceMemory<'d>,
+        offset: u64,
+    ) -> ResultAndSelf<Self, ImageWithoutMemory<'d>> {
         if let Err(err) = unsafe {
             (memory.device().fun.bind_image_memory)(
                 memory.device().handle(),
@@ -128,11 +128,11 @@ impl Image {
         } {
             return Err(ErrorAndSelf(err.into(), inner));
         }
-        Ok(Arc::new(Self { inner, _memory: Some(memory.resource()) }))
+        Ok(Self { inner, _memory: Some(memory.resource()) })
     }
 }
 
-impl Drop for ImageWithoutMemory {
+impl Drop for ImageWithoutMemory<'_> {
     fn drop(&mut self) {
         if let ImageOwner::Application = &self.res {
             unsafe {
@@ -146,7 +146,7 @@ impl Drop for ImageWithoutMemory {
     }
 }
 
-impl ImageWithoutMemory {
+impl<'d> ImageWithoutMemory<'d> {
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkImage> {
         self.handle.borrow_mut()
@@ -179,7 +179,7 @@ impl ImageWithoutMemory {
     /// Allocate a single piece of memory for the image and bind it.
     pub fn allocate_memory(
         self, memory_type_index: u32,
-    ) -> ResultAndSelf<Arc<Image>, Self> {
+    ) -> ResultAndSelf<Image<'d>, Self> {
         let mem_req = self.memory_requirements();
         if (1 << memory_type_index) & mem_req.memory_type_bits == 0 {
             return Err(ErrorAndSelf(Error::InvalidArgument, self));
@@ -197,10 +197,10 @@ impl ImageWithoutMemory {
     }
 }
 
-impl Image {
+impl<'d> Image<'d> {
     pub(crate) fn new_from(
-        handle: Handle<VkImage>, device: Arc<Device>,
-        res: Subobject<SwapchainImages>, format: Format, extent: Extent3D,
+        handle: Handle<VkImage>, device: &'d Device,
+        res: Subobject<SwapchainImages<'d>>, format: Format, extent: Extent3D,
         array_layers: u32, usage: ImageUsageFlags,
     ) -> Self {
         Self {
@@ -223,8 +223,8 @@ impl Image {
         self.inner.handle.borrow()
     }
     /// Returns the associated device.
-    pub fn device(&self) -> &Arc<Device> {
-        &self.inner.device
+    pub fn device(&self) -> &Device {
+        self.inner.device
     }
     /// Returns the allowed image usages
     pub fn usage(&self) -> ImageUsageFlags {
@@ -278,19 +278,19 @@ impl Image {
 /// An
 #[doc = crate::spec_link!("image view", "12", "resources-image-views")]
 #[derive(Debug)]
-pub struct ImageView {
+pub struct ImageView<'d> {
     handle: Handle<VkImageView>,
-    image: Arc<Image>,
+    image: Arc<Image<'d>>,
 }
 
-impl PartialEq for ImageView {
+impl PartialEq for ImageView<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.image.inner.device == other.image.inner.device
             && self.handle == other.handle
     }
 }
-impl Eq for ImageView {}
-impl std::hash::Hash for ImageView {
+impl Eq for ImageView<'_> {}
+impl std::hash::Hash for ImageView<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.image.inner.device.hash(state);
         self.handle.hash(state);
@@ -307,10 +307,10 @@ pub struct ImageViewCreateInfo {
     pub subresource_range: ImageSubresourceRange,
 }
 
-impl ImageView {
+impl<'d> ImageView<'d> {
     /// Create an image view of the image.
     pub fn new(
-        image: &Arc<Image>, info: &ImageViewCreateInfo,
+        image: &Arc<Image<'d>>, info: &ImageViewCreateInfo,
     ) -> Result<Arc<Self>> {
         let vk_info = VkImageViewCreateInfo {
             stype: Default::default(),
@@ -335,7 +335,7 @@ impl ImageView {
     }
 }
 
-impl Drop for ImageView {
+impl Drop for ImageView<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.image.device().fun.destroy_image_view)(
@@ -347,17 +347,17 @@ impl Drop for ImageView {
     }
 }
 
-impl ImageView {
+impl<'d> ImageView<'d> {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkImageView> {
         self.handle.borrow()
     }
     /// Returns the associated device.
-    pub fn device(&self) -> &Arc<Device> {
+    pub fn device(&self) -> &Device {
         self.image.device()
     }
     /// Returns the underlying image
-    pub fn image(&self) -> &Arc<Image> {
+    pub fn image(&self) -> &Arc<Image<'d>> {
         &self.image
     }
 }

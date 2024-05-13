@@ -15,26 +15,26 @@ use crate::types::*;
 use crate::vk::Device;
 
 #[derive(Debug)]
-pub struct MemoryLifetime {
+pub struct MemoryLifetime<'d> {
     handle: Handle<VkDeviceMemory>,
-    device: Arc<Device>,
+    device: &'d Device<'d>,
 }
 
 /// A piece of
 #[doc = crate::spec_link!("device memory", "11", "memory-device")]
 #[derive(Debug)]
-pub struct DeviceMemory {
-    inner: Owner<MemoryLifetime>,
+pub struct DeviceMemory<'d> {
+    inner: Owner<MemoryLifetime<'d>>,
     allocation_size: u64,
     memory_type_index: u32,
 }
 
-impl DeviceMemory {
+impl<'d> DeviceMemory<'d> {
     /// Returns [`Error::OutOfBounds`] if no memory type exists with the given
     /// index.
     #[doc = crate::man_link!(vkAllocateMemory)]
     pub fn new(
-        device: &Arc<Device>, allocation_size: u64, memory_type_index: u32,
+        device: &'d Device, allocation_size: u64, memory_type_index: u32,
     ) -> Result<Self> {
         let mem_types = device.physical_device().memory_properties();
         if memory_type_index >= mem_types.memory_types.len() {
@@ -78,11 +78,11 @@ impl DeviceMemory {
         self.inner.handle.borrow_mut()
     }
     /// Returns the associated device.
-    pub fn device(&self) -> &Arc<Device> {
-        &self.inner.device
+    pub fn device(&self) -> &Device {
+        self.inner.device
     }
     /// Extend the lifetime of the memory until the returned object is dropped.
-    pub(crate) fn resource(&self) -> Subobject<MemoryLifetime> {
+    pub(crate) fn resource(&self) -> Subobject<MemoryLifetime<'d>> {
         Subobject::new(&self.inner)
     }
     /// Check if the memory meets `requirements` at the given offset.
@@ -95,7 +95,7 @@ impl DeviceMemory {
     }
 }
 
-impl Drop for MemoryLifetime {
+impl Drop for MemoryLifetime<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.free_memory)(
@@ -109,8 +109,8 @@ impl Drop for MemoryLifetime {
 }
 
 /// A [`DeviceMemory`] which has been mapped and can be written to
-pub struct MappedMemory {
-    memory: DeviceMemory,
+pub struct MappedMemory<'d> {
+    memory: DeviceMemory<'d>,
     size: usize,
     ptr: NonNull<u8>,
 }
@@ -131,12 +131,12 @@ pub struct MemoryWrite<'a> {
 }
 
 #[allow(clippy::len_without_is_empty)]
-impl DeviceMemory {
+impl<'d> DeviceMemory<'d> {
     /// Map the memory so it can be written to. Returns [`Error::OutOfBounds`] if
     /// `offset` and `size` are out of bounds.
     pub fn map(
         mut self, offset: u64, size: usize,
-    ) -> ResultAndSelf<MappedMemory, Self> {
+    ) -> ResultAndSelf<MappedMemory<'d>, Self> {
         let (end, overflow) = offset.overflowing_add(size as u64);
         if overflow || end > self.allocation_size || size > isize::MAX as usize
         {
@@ -164,13 +164,13 @@ impl DeviceMemory {
     }
 }
 
-impl Drop for MappedMemory {
+impl Drop for MappedMemory<'_> {
     fn drop(&mut self) {
         self.unmap_impl()
     }
 }
 
-impl MappedMemory {
+impl<'d> MappedMemory<'d> {
     fn unmap_impl(&mut self) {
         let inner = &mut *self.memory.inner;
         unsafe {
@@ -182,14 +182,14 @@ impl MappedMemory {
     }
 
     /// Unmaps the memory
-    pub fn unmap(mut self) -> DeviceMemory {
+    pub fn unmap(mut self) -> DeviceMemory<'d> {
         self.unmap_impl();
         let no_drop = std::mem::ManuallyDrop::new(self);
         unsafe { std::ptr::addr_of!(no_drop.memory).read() }
     }
 
     /// Gets the associated memory object
-    pub fn memory(&self) -> &DeviceMemory {
+    pub fn memory(&self) -> &DeviceMemory<'d> {
         &self.memory
     }
 
@@ -286,10 +286,10 @@ impl<'a> std::io::Write for MemoryWrite<'a> {
 }
 
 // Access to ptr is properly controlled with borrows
-unsafe impl Send for MappedMemory {}
-unsafe impl Sync for MappedMemory {}
-impl std::panic::UnwindSafe for MappedMemory {}
-impl std::panic::RefUnwindSafe for MappedMemory {}
+unsafe impl Send for MappedMemory<'_> {}
+unsafe impl Sync for MappedMemory<'_> {}
+impl std::panic::UnwindSafe for MappedMemory<'_> {}
+impl std::panic::RefUnwindSafe for MappedMemory<'_> {}
 unsafe impl<'a> Send for MemoryRead<'a> {}
 unsafe impl<'a> Sync for MemoryRead<'a> {}
 impl<'a> std::panic::UnwindSafe for MemoryRead<'a> {}

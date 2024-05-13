@@ -18,16 +18,16 @@ use crate::physical_device::PhysicalDevice;
 use super::khr_surface::SurfaceKHR;
 
 /// An KHR_win32_surface extension object.
-pub struct KHRWin32Surface {
+pub struct KHRWin32Surface<'i> {
     fun: Win32SurfaceFn,
-    instance: Arc<Instance>,
+    instance: &'i Instance,
 }
 
-impl KHRWin32Surface {
+impl<'i> KHRWin32Surface<'i> {
     /// Creates an [`KHRWin32Surface`] extension object. Panics if the extension
     /// functions can't be loaded.
-    pub fn new(instance: &Arc<Instance>) -> Self {
-        Self { fun: Win32SurfaceFn::new(instance), instance: instance.clone() }
+    pub fn new(instance: &'i Instance) -> Self {
+        Self { fun: Win32SurfaceFn::new(instance), instance }
     }
 
     #[doc = crate::man_link!(vkGetPhysicalDeviceWin32PresentationSupportKHR)]
@@ -45,7 +45,7 @@ impl KHRWin32Surface {
     #[doc = crate::man_link!(vkCreateWin32SurfaceKHR)]
     pub unsafe fn create_win32_surface_ext(
         &self, info: &Win32SurfaceCreateInfoKHR,
-    ) -> Result<SurfaceKHR> {
+    ) -> Result<SurfaceKHR<'i>> {
         let mut handle = None;
         (self.fun.create_win32_surface_khr)(
             self.instance.handle(),
@@ -53,7 +53,7 @@ impl KHRWin32Surface {
             None,
             &mut handle,
         )?;
-        Ok(SurfaceKHR::new(handle.unwrap(), self.instance.clone()))
+        Ok(SurfaceKHR::new(handle.unwrap(), self.instance))
     }
 }
 

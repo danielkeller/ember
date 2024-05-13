@@ -16,16 +16,16 @@ use crate::instance::Instance;
 use super::khr_surface::SurfaceKHR;
 
 /// An EXT_metal_surface extension object.
-pub struct EXTMetalSurface {
+pub struct EXTMetalSurface<'i> {
     fun: MetalSurfaceFn,
-    instance: Arc<Instance>,
+    instance: &'i Instance,
 }
 
-impl EXTMetalSurface {
+impl<'i> EXTMetalSurface<'i> {
     /// Creates an [`EXTMetalSurface`] extension object. Panics if the extension
     /// functions can't be loaded.
-    pub fn new(instance: &Arc<Instance>) -> Self {
-        Self { fun: MetalSurfaceFn::new(instance), instance: instance.clone() }
+    pub fn new(instance: &'i Instance) -> Self {
+        Self { fun: MetalSurfaceFn::new(instance), instance }
     }
 
     /// Creates a metal surface. The `layer` member of
@@ -33,7 +33,7 @@ impl EXTMetalSurface {
     #[doc = crate::man_link!(vkCreateMetalSurfaceEXT)]
     pub unsafe fn create_metal_surface_ext(
         &self, info: &MetalSurfaceCreateInfoEXT,
-    ) -> Result<SurfaceKHR> {
+    ) -> Result<SurfaceKHR<'i>> {
         let mut handle = None;
         (self.fun.create_metal_surface_ext)(
             self.instance.handle(),
@@ -41,7 +41,7 @@ impl EXTMetalSurface {
             None,
             &mut handle,
         )?;
-        Ok(SurfaceKHR::new(handle.unwrap(), self.instance.clone()))
+        Ok(SurfaceKHR::new(handle.unwrap(), self.instance))
     }
 }
 

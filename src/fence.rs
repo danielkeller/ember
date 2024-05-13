@@ -15,9 +15,9 @@ use crate::types::*;
 #[doc = concat!(crate::spec_link!("fence", "7", "synchronization-fences"), ".")]
 /// When submitted to a [`Queue`](crate::vk::Queue), becomes a [`PendingFence`].
 #[derive(Debug)]
-pub struct Fence {
+pub struct Fence<'d> {
     handle: Option<Handle<VkFence>>,
-    device: Arc<Device>,
+    device: &'d Device<'d>,
 }
 
 /// A
@@ -25,15 +25,15 @@ pub struct Fence {
 /// with a signal operation pending.
 #[derive(Debug)]
 #[must_use = "Dropping a pending fence leaks it."]
-pub struct PendingFence {
+pub struct PendingFence<'d> {
     handle: Handle<VkFence>,
-    device: Arc<Device>,
+    device: &'d Device<'d>,
     resources: Cleanup,
 }
 
-impl Fence {
+impl<'d> Fence<'d> {
     #[doc = crate::man_link!(vkCreateFence)]
-    pub fn new(device: &Arc<Device>) -> Result<Self> {
+    pub fn new(device: &'d Device) -> Result<Self> {
         let mut handle = None;
         unsafe {
             (device.fun.create_fence)(
@@ -47,7 +47,7 @@ impl Fence {
     }
 }
 
-impl Drop for Fence {
+impl Drop for Fence<'_> {
     fn drop(&mut self) {
         if let Some(handle) = &mut self.handle {
             unsafe {
@@ -61,21 +61,23 @@ impl Drop for Fence {
     }
 }
 
-impl Fence {
+impl<'d> Fence<'d> {
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkFence> {
         self.handle.as_mut().unwrap().borrow_mut()
     }
-    pub(crate) fn into_pending(mut self, resources: Cleanup) -> PendingFence {
+    pub(crate) fn into_pending(
+        mut self, resources: Cleanup,
+    ) -> PendingFence<'d> {
         PendingFence {
             handle: self.handle.take().unwrap(),
-            device: self.device.clone(),
+            device: self.device,
             resources,
         }
     }
 }
 
-impl PendingFence {
+impl<'d> PendingFence<'d> {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkFence> {
         self.handle.borrow()
@@ -84,7 +86,7 @@ impl PendingFence {
     /// (including [`CommandPools`](crate::vk::CommandPool)) submitted to
     /// the queue, and resets the fence.
     #[doc = crate::man_link!(vkWaitForFences)]
-    pub fn wait(mut self) -> Result<Fence> {
+    pub fn wait(mut self) -> Result<Fence<'d>> {
         unsafe {
             (self.device.fun.wait_for_fences)(
                 self.device.handle(),

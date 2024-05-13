@@ -20,16 +20,16 @@ use crate::physical_device::PhysicalDevice;
 use super::khr_surface::SurfaceKHR;
 
 /// An KHR_xlib_surface extension object.
-pub struct KHRXlibSurface {
+pub struct KHRXlibSurface<'i> {
     fun: XlibSurfaceFn,
-    instance: Arc<Instance>,
+    instance: &'i Instance,
 }
 
-impl KHRXlibSurface {
+impl<'i> KHRXlibSurface<'i> {
     /// Creates an [`KHRXlibSurface`] extension object. Panics if the extension
     /// functions can't be loaded.
-    pub fn new(instance: &Arc<Instance>) -> Self {
-        Self { fun: XlibSurfaceFn::new(instance), instance: instance.clone() }
+    pub fn new(instance: &'i Instance) -> Self {
+        Self { fun: XlibSurfaceFn::new(instance), instance }
     }
 
     #[doc = crate::man_link!(vkGetPhysicalDeviceXlibPresentationSupportKHR)]
@@ -48,7 +48,7 @@ impl KHRXlibSurface {
     #[doc = crate::man_link!(vkCreateXlibSurfaceKHR)]
     pub unsafe fn create_xlib_surface_ext(
         &self, info: &XlibSurfaceCreateInfoKHR,
-    ) -> Result<SurfaceKHR> {
+    ) -> Result<SurfaceKHR<'i>> {
         let mut handle = None;
         (self.fun.create_xlib_surface_khr)(
             self.instance.handle(),
@@ -56,7 +56,7 @@ impl KHRXlibSurface {
             None,
             &mut handle,
         )?;
-        Ok(SurfaceKHR::new(handle.unwrap(), self.instance.clone()))
+        Ok(SurfaceKHR::new(handle.unwrap(), self.instance))
     }
 }
 

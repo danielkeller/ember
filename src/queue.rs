@@ -36,16 +36,16 @@ use crate::vk::PipelineStageFlags;
 /// to another queue in [`SubmitInfo::wait`], (and so on) and on the last queue
 /// one of the first two things is done.
 #[derive(Debug)]
-pub struct Queue {
+pub struct Queue<'d> {
     handle: Handle<VkQueue>,
-    device: Arc<Device>,
+    device: &'d Device<'d>,
     resources: CleanupQueue,
     scratch: Exclusive<bumpalo::Bump>,
 }
 
-impl Device {
+impl Device<'_> {
     pub(crate) fn queue(
-        self: &Arc<Self>, family_index: u32, queue_index: u32,
+        self: &Self, family_index: u32, queue_index: u32,
     ) -> Queue {
         let mut handle = None;
         unsafe {
@@ -65,7 +65,7 @@ impl Device {
     }
 }
 
-impl Queue {
+impl Queue<'_> {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkQueue> {
         self.handle.borrow()
@@ -81,7 +81,7 @@ impl Queue {
     }
 }
 
-impl Drop for Queue {
+impl Drop for Queue<'_> {
     /// Waits for the queue to be idle before dropping resources
     fn drop(&mut self) {
         if let Err(err) = self.wait_idle() {
@@ -99,7 +99,7 @@ pub struct SubmitInfo<'a> {
     pub signal: &'a mut [&'a mut Semaphore],
 }
 
-impl Queue {
+impl Queue<'_> {
     /// Returns [`Error::InvalidArgument`] if any semaphore in `signal` already
     /// has a signal operation pending, or if any semaphore in `wait` does not,
     /// or if any command buffer is not in the executable state.

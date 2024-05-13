@@ -14,25 +14,25 @@ use crate::types::*;
 
 /// A
 #[doc = crate::spec_link!("semaphore", "7", "synchronization-semaphores")]
-pub struct Semaphore {
-    pub(crate) signaller: Option<SemaphoreSignaller>,
-    pub(crate) inner: Arc<SemaphoreRAII>,
+pub struct Semaphore<'d> {
+    pub(crate) signaller: Option<SemaphoreSignaller<'d>>,
+    pub(crate) inner: Arc<SemaphoreRAII<'d>>,
 }
 
 #[derive(Debug)]
-pub(crate) enum SemaphoreSignaller {
-    Swapchain(Arc<Image>),
+pub(crate) enum SemaphoreSignaller<'d> {
+    Swapchain(Arc<Image<'d>>),
     Queue(Cleanup),
 }
 
-pub(crate) struct SemaphoreRAII {
+pub(crate) struct SemaphoreRAII<'d> {
     handle: Handle<VkSemaphore>,
-    device: Arc<Device>,
+    device: &'d Device<'d>,
 }
 
-impl Semaphore {
+impl<'d> Semaphore<'d> {
     #[doc = crate::man_link!(vkCreateSemaphore)]
-    pub fn new(device: &Arc<Device>) -> Result<Self> {
+    pub fn new(device: &'d Device) -> Result<Self> {
         let mut handle = None;
         unsafe {
             (device.fun.create_semaphore)(
@@ -44,15 +44,12 @@ impl Semaphore {
         }
         Ok(Self {
             signaller: None,
-            inner: Arc::new(SemaphoreRAII {
-                handle: handle.unwrap(),
-                device: device.clone(),
-            }),
+            inner: Arc::new(SemaphoreRAII { handle: handle.unwrap(), device }),
         })
     }
 }
 
-impl Drop for Semaphore {
+impl Drop for Semaphore<'_> {
     /// **Warning:** If a semaphore is passed to
     /// [`SwapchainKHR::acquire_next_image`](crate::vk::ext::SwapchainKHR::acquire_next_image())
     /// and then dropped without being waited on, the swapchain and semaphore
@@ -68,11 +65,12 @@ impl Drop for Semaphore {
             );
         }
         // Dropping an unwaited semaphore is normally fine since for a
-        // queue, the signal op is ordered before the fence signal.
+        // queue, the signal op is ordered before the fence signal, and the
+        // queue and fence take care of the lifetime of the SemaphoreRAII.
     }
 }
 
-impl Drop for SemaphoreRAII {
+impl Drop for SemaphoreRAII<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_semaphore)(
@@ -84,7 +82,7 @@ impl Drop for SemaphoreRAII {
     }
 }
 
-impl Semaphore {
+impl Semaphore<'_> {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkSemaphore> {
         self.inner.handle.borrow()
@@ -97,7 +95,7 @@ impl Semaphore {
     }
 
     /// Panics if there is no signaller
-    pub(crate) fn take_signaller(&mut self) -> Arc<dyn Send + Sync> {
+    pub(crate) fn take_signaller(&mut self) -> Arc<dyn Send + Sync + '_> {
         match self.signaller.take().unwrap() {
             SemaphoreSignaller::Queue(cleanup) => Arc::new(cleanup.raii()),
             SemaphoreSignaller::Swapchain(image) => image,

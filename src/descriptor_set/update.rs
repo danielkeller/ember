@@ -6,8 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::fmt::Debug;
-
 use super::{DescriptorSet, DescriptorSetLayoutBinding};
 use crate::buffer::Buffer;
 use crate::device::Device;
@@ -103,17 +101,17 @@ use bumpalo::collections::Vec as BumpVec;
 ///     .end();
 /// # Ok::<_, vk::Error>(())
 /// ```
-pub struct DescriptorSetUpdateBuilder {
-    pub(crate) device: Arc<Device>,
+pub struct DescriptorSetUpdateBuilder<'d> {
+    pub(crate) device: &'d Device<'d>,
     pub(crate) scratch: Exclusive<bumpalo::Bump>,
 }
 
-impl DescriptorSetUpdateBuilder {
+impl<'d> DescriptorSetUpdateBuilder<'d> {
     /// Create an object that builds calls to vkUpdateDescriptorSets.
-    pub fn new(device: &Arc<Device>) -> Self {
+    pub fn new(device: &'d Device) -> Self {
         DescriptorSetUpdateBuilder {
             scratch: Exclusive::new(bumpalo::Bump::new()),
-            device: device.clone(),
+            device,
         }
     }
 }
@@ -122,21 +120,21 @@ struct Resource {
     set: usize,
     binding: usize,
     element: usize,
-    resource: Arc<dyn Send + Sync + Debug>,
+    // resource: Arc<dyn Send + Sync + Debug>, // FIXME
 }
 
 /// A builder for a call to vkUpdateDescriptorSets.
 #[must_use = "This object does nothing until end() is called."]
 pub struct DescriptorSetUpdates<'a> {
-    device: &'a Device,
+    device: &'a Device<'a>,
     bump: &'a bumpalo::Bump,
     writes: BumpVec<'a, VkWriteDescriptorSet<'a>>,
     copies: BumpVec<'a, VkCopyDescriptorSet<'a>>,
-    dst_sets: BumpVec<'a, &'a mut DescriptorSet>,
+    dst_sets: BumpVec<'a, &'a mut DescriptorSet<'a>>,
     resources: BumpVec<'a, Resource>,
 }
 
-impl DescriptorSetUpdateBuilder {
+impl<'d> DescriptorSetUpdateBuilder<'d> {
     /// Begin creating a call to vkUpdateDescriptorSets. Since these calls are
     /// expensive, try to combine them as much as possible.
     pub fn begin(&mut self) -> DescriptorSetUpdates<'_> {
@@ -156,22 +154,22 @@ impl DescriptorSetUpdateBuilder {
 #[must_use = "This object does nothing until end() is called."]
 pub struct DescriptorSetUpdate<'a> {
     pub(crate) updates: DescriptorSetUpdates<'a>,
-    pub(crate) set: &'a mut DescriptorSet,
+    pub(crate) set: &'a mut DescriptorSet<'a>,
 }
 
 impl<'a> DescriptorSetUpdates<'a> {
     /// Add updates to the given set to the builder.
     pub fn dst_set(
-        self, set: &'a mut DescriptorSet,
+        self, set: &'a mut DescriptorSet<'a>,
     ) -> DescriptorSetUpdate<'a> {
         assert_eq!(&*set.layout.device, self.device);
         DescriptorSetUpdate { updates: self, set }
     }
-    pub(crate) fn end(mut self) {
-        for res in self.resources {
-            self.dst_sets[res.set].resources[res.binding][res.element] =
-                Some(res.resource);
-        }
+    pub(crate) fn end(self) {
+        // for res in self.resources {
+        //     self.dst_sets[res.set].resources[res.binding][res.element] =
+        //         Some(res.resource);
+        // }
         unsafe {
             (self.device.fun.update_descriptor_sets)(
                 self.device.handle(),
@@ -186,7 +184,7 @@ impl<'a> DescriptorSetUpdates<'a> {
 
 #[doc = crate::man_link!(VkDescriptorBufferInfo)]
 pub struct DescriptorBufferInfo<'a> {
-    pub buffer: &'a Arc<Buffer>,
+    pub buffer: &'a Arc<Buffer<'a>>,
     pub offset: u64,
     pub range: Option<u64>,
 }
@@ -226,7 +224,7 @@ impl<'a> DescriptorSetUpdate<'a> {
 
     /// Add updates to the given set to the builder.
     pub fn dst_set(
-        mut self, set: &'a mut DescriptorSet,
+        mut self, set: &'a mut DescriptorSet<'a>,
     ) -> DescriptorSetUpdate<'a> {
         self.updates.dst_sets.push(self.set);
         self.updates.dst_set(set)
@@ -251,12 +249,11 @@ impl<'a> DescriptorSetUpdate<'a> {
             if !descriptor_type.supports_buffer_usage(b.buffer.usage()) {
                 return Err(Error::InvalidArgument);
             }
-            assert!(std::ptr::eq(&**b.buffer.device(), self.updates.device));
+            assert_eq!(b.buffer.device(), self.updates.device);
             self.updates.resources.push(Resource {
                 set: self.updates.dst_sets.len(),
                 binding,
                 element,
-                resource: b.buffer.clone(),
             });
         }
 
@@ -364,12 +361,11 @@ impl<'a> DescriptorSetUpdate<'a> {
             {
                 return Err(Error::InvalidArgument);
             }
-            assert!(std::ptr::eq(&**s.device(), self.updates.device));
+            assert_eq!(s.device(), self.updates.device);
             self.updates.resources.push(Resource {
                 set: self.updates.dst_sets.len(),
                 binding,
                 element,
-                resource: s.clone(),
             });
         }
         let image_info =
@@ -411,12 +407,11 @@ impl<'a> DescriptorSetUpdate<'a> {
             if !descriptor_type.supports_image_usage(i.image().usage()) {
                 return Err(Error::InvalidArgument);
             }
-            assert!(std::ptr::eq(&**i.device(), self.updates.device));
+            assert_eq!(i.device(), self.updates.device);
             self.updates.resources.push(Resource {
                 set: self.updates.dst_sets.len(),
                 binding,
                 element,
-                resource: i.clone(),
             });
         }
         let image_info = self.updates.bump.alloc_slice_fill_iter(
@@ -495,12 +490,11 @@ impl<'a> DescriptorSetUpdate<'a> {
         );
         for (&(i, _), be) in images.iter().zip(iter) {
             let (binding, element) = be?;
-            assert!(std::ptr::eq(&**i.device(), self.updates.device));
+            assert_eq!(i.device(), self.updates.device);
             self.updates.resources.push(Resource {
                 set: self.updates.dst_sets.len(),
                 binding,
                 element,
-                resource: i.clone(),
             });
         }
         let image_info = self.updates.bump.alloc_slice_fill_iter(
@@ -530,7 +524,7 @@ impl<'a> DescriptorSetUpdate<'a> {
 /// Gets the binding and element number for a series of consecutive bindings,
 /// doing bounds and type checking on each.
 struct BindingIter<'a> {
-    bindings: &'a [DescriptorSetLayoutBinding],
+    bindings: &'a [DescriptorSetLayoutBinding<'a>],
     binding: usize,
     element: u32,
     descriptor_type: DescriptorType,

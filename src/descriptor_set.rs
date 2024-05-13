@@ -22,10 +22,10 @@ pub mod update;
 /// A
 #[doc = crate::spec_link!("descriptor set layout", "14", "descriptorsets-setlayout")]
 #[derive(Debug, Eq)]
-pub struct DescriptorSetLayout {
+pub struct DescriptorSetLayout<'d> {
     handle: Handle<VkDescriptorSetLayout>,
-    bindings: Vec<DescriptorSetLayoutBinding>,
-    device: Arc<Device>,
+    bindings: Vec<DescriptorSetLayoutBinding<'d>>,
+    device: &'d Device<'d>,
 }
 
 /// Note that unlike in Vulkan, the binding number is implicitly the index of
@@ -38,18 +38,18 @@ pub struct DescriptorSetLayout {
 ///
 #[doc = crate::man_link!(VkDescriptorSetLayoutBinding)]
 #[derive(Debug, PartialEq, Eq, Default)]
-pub struct DescriptorSetLayoutBinding {
+pub struct DescriptorSetLayoutBinding<'d> {
     pub descriptor_type: DescriptorType,
     pub descriptor_count: u32,
     pub stage_flags: ShaderStageFlags,
-    pub immutable_samplers: Vec<Arc<Sampler>>,
+    pub immutable_samplers: Vec<Arc<Sampler<'d>>>,
 }
 
-impl DescriptorSetLayout {
+impl<'d> DescriptorSetLayout<'d> {
     #[doc = crate::man_link!(vkDescriptorSetLayout)]
     pub fn new(
-        device: &Arc<Device>, bindings: Vec<DescriptorSetLayoutBinding>,
-    ) -> Result<Arc<Self>> {
+        device: &'d Device, bindings: Vec<DescriptorSetLayoutBinding<'d>>,
+    ) -> Result<Self> {
         for b in &bindings {
             if !b.immutable_samplers.is_empty()
                 && b.immutable_samplers.len() as u32 != b.descriptor_count
@@ -91,15 +91,11 @@ impl DescriptorSetLayout {
             )?;
         }
 
-        Ok(Arc::new(DescriptorSetLayout {
-            handle: handle.unwrap(),
-            bindings,
-            device: device.clone(),
-        }))
+        Ok(DescriptorSetLayout { handle: handle.unwrap(), bindings, device })
     }
 }
 
-impl Drop for DescriptorSetLayout {
+impl Drop for DescriptorSetLayout<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_descriptor_set_layout)(
@@ -111,14 +107,14 @@ impl Drop for DescriptorSetLayout {
     }
 }
 
-impl PartialEq for DescriptorSetLayout {
+impl PartialEq for DescriptorSetLayout<'_> {
     /// Compatible descriptor sets layouts are equal
     fn eq(&self, other: &Self) -> bool {
         self.bindings == other.bindings && self.device == other.device
     }
 }
 
-impl DescriptorSetLayout {
+impl DescriptorSetLayout<'_> {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkDescriptorSetLayout> {
         self.handle.borrow()
@@ -149,9 +145,9 @@ impl DescriptorSetLayout {
     }
 }
 
-struct DescriptorPoolLifetime {
+struct DescriptorPoolLifetime<'d> {
     handle: Handle<VkDescriptorPool>,
-    device: Arc<Device>,
+    device: &'d Device<'d>,
 }
 
 #[derive(Debug)]
@@ -159,15 +155,15 @@ struct AllocatedSets;
 
 /// A
 #[doc = crate::spec_link!("descriptor pool", "14", "descriptorsets-allocation")]
-pub struct DescriptorPool {
-    res: Owner<DescriptorPoolLifetime>,
+pub struct DescriptorPool<'d> {
+    res: Owner<DescriptorPoolLifetime<'d>>,
     allocated: Arc<AllocatedSets>,
 }
 
-impl DescriptorPool {
+impl<'d> DescriptorPool<'d> {
     #[doc = crate::man_link!(vkCreateDescriptorPool)]
     pub fn new(
-        device: &Arc<Device>, max_sets: u32, pool_sizes: &[DescriptorPoolSize],
+        device: &'d Device, max_sets: u32, pool_sizes: &[DescriptorPoolSize],
     ) -> Result<Self> {
         let mut handle = None;
         unsafe {
@@ -184,14 +180,14 @@ impl DescriptorPool {
         }
         let res = Owner::new(DescriptorPoolLifetime {
             handle: handle.unwrap(),
-            device: device.clone(),
+            device,
         });
         let allocated = Arc::new(AllocatedSets);
         Ok(DescriptorPool { res, allocated })
     }
 }
 
-impl Drop for DescriptorPoolLifetime {
+impl Drop for DescriptorPoolLifetime<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_descriptor_pool)(
@@ -203,7 +199,7 @@ impl Drop for DescriptorPoolLifetime {
     }
 }
 
-impl DescriptorPool {
+impl DescriptorPool<'_> {
     /// If all descriptor sets allocated from the pool have not been dropped,
     /// returns [`Error::SynchronizationError`].
     pub fn reset(&mut self) -> Result<()> {
@@ -236,20 +232,20 @@ impl DescriptorPool {
 /// will prevent the set from being freed until the command pool is
 /// [`reset`](crate::command_buffer::CommandPool::reset).)
 #[derive(Debug)]
-pub struct DescriptorSet {
+pub struct DescriptorSet<'d> {
     handle: Handle<VkDescriptorSet>,
-    layout: Arc<DescriptorSetLayout>,
+    layout: Arc<DescriptorSetLayout<'d>>,
     resources: Vec<Vec<Option<Arc<dyn Send + Sync + Debug>>>>,
     _allocation: Arc<AllocatedSets>,
-    _pool: Subobject<DescriptorPoolLifetime>,
+    _pool: Subobject<DescriptorPoolLifetime<'d>>,
 }
 
-impl DescriptorSet {
+impl<'d> DescriptorSet<'d> {
     #[doc = crate::man_link!(vkAllocateDescriptorSets)]
     pub fn new(
-        pool: &mut DescriptorPool, layout: &Arc<DescriptorSetLayout>,
+        pool: &mut DescriptorPool<'d>, layout: &Arc<DescriptorSetLayout<'d>>,
     ) -> Result<Self> {
-        assert!(Arc::ptr_eq(&pool.res.device, &layout.device));
+        assert_eq!(pool.res.device, layout.device);
         let mut handle = MaybeUninit::uninit();
         let res = &mut *pool.res;
         let handle = unsafe {
@@ -296,5 +292,5 @@ impl DescriptorSet {
     }
 }
 
-impl std::panic::UnwindSafe for DescriptorSet {}
-impl std::panic::RefUnwindSafe for DescriptorSet {}
+impl std::panic::UnwindSafe for DescriptorSet<'_> {}
+impl std::panic::RefUnwindSafe for DescriptorSet<'_> {}

@@ -15,17 +15,17 @@ use crate::types::*;
 /// A
 #[doc = crate::spec_link!("framebuffer", "8", "_framebuffers")]
 #[derive(Debug)]
-pub struct Framebuffer {
+pub struct Framebuffer<'d> {
     handle: Handle<VkFramebuffer>,
-    _attachments: Vec<Arc<ImageView>>,
-    render_pass: Arc<RenderPass>,
+    _attachments: Vec<Arc<ImageView<'d>>>,
+    render_pass: Arc<RenderPass<'d>>,
 }
 
-impl Framebuffer {
+impl<'d> Framebuffer<'d> {
     #[doc = crate::man_link!(vkCreateFrameuffer)]
     pub fn new(
-        render_pass: &Arc<RenderPass>, flags: FramebufferCreateFlags,
-        attachments: Vec<Arc<ImageView>>, size: Extent3D,
+        render_pass: &Arc<RenderPass<'d>>, flags: FramebufferCreateFlags,
+        attachments: Vec<Arc<ImageView<'d>>>, size: Extent3D,
     ) -> Result<Arc<Self>> {
         for iv in &attachments {
             assert_eq!(iv.device(), render_pass.device());
@@ -75,7 +75,7 @@ impl Framebuffer {
     }
 }
 
-impl Drop for Framebuffer {
+impl Drop for Framebuffer<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.render_pass.device.fun.destroy_framebuffer)(

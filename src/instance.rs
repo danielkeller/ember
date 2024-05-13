@@ -29,15 +29,22 @@ impl Drop for Instance {
     }
 }
 
+impl PartialEq for Instance {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
+}
+impl Eq for Instance {}
+
 impl Instance {
     /// Creates a new instance
     #[doc = crate::man_link!(vkCreateInstance)]
-    pub fn new<'a>(info: &'a InstanceCreateInfo<'a>) -> Result<Arc<Self>> {
+    pub fn new<'a>(info: &'a InstanceCreateInfo<'a>) -> Result<Self> {
         let mut handle = None;
         unsafe { (load::vk_create_instance())(info, None, &mut handle)? };
         let handle = handle.unwrap();
         let fun = InstanceFn::new(handle.borrow());
-        Ok(Arc::new(Instance { handle, fun }))
+        Ok(Instance { handle, fun })
     }
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkInstance> {

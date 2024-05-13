@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::error::{Error, Result};
 use crate::instance::Instance;
@@ -16,36 +16,37 @@ use crate::queue::Queue;
 use crate::types::*;
 
 /// A logical device.
-pub struct Device {
+pub struct Device<'i> {
     handle: Handle<VkDevice>,
     pub(crate) fun: DeviceFn,
-    physical_device: PhysicalDevice,
+    physical_device: PhysicalDevice<'i>,
     limits: PhysicalDeviceLimits,
     enabled: PhysicalDeviceFeatures,
     memory_allocation_count: AtomicU32,
     sampler_allocation_count: AtomicU32,
     queues: Vec<u32>,
+    queues_taken: AtomicBool,
 }
 
-impl std::fmt::Debug for Device {
+impl std::fmt::Debug for Device<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.handle.fmt(f)
     }
 }
 
-impl PartialEq for Device {
+impl PartialEq for Device<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.handle == other.handle
     }
 }
-impl Eq for Device {}
-impl std::hash::Hash for Device {
+impl Eq for Device<'_> {}
+impl std::hash::Hash for Device<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.handle.hash(state)
     }
 }
 
-impl Drop for Device {
+impl Drop for Device<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.fun.device_wait_idle)(self.handle.borrow_mut()).unwrap();
@@ -54,13 +55,13 @@ impl Drop for Device {
     }
 }
 
-impl Device {
+impl<'i> Device<'i> {
     /// Create a logical device for this physical device. Queues are returned in
     /// the order requested in `info.queue_create_infos`.
     #[doc = crate::man_link!(vkCreateDevice)]
     pub fn new(
-        phy: &PhysicalDevice, info: &DeviceCreateInfo<'_>,
-    ) -> Result<(Arc<Self>, Vec<Vec<Queue>>)> {
+        phy: &PhysicalDevice<'i>, info: &DeviceCreateInfo<'_>,
+    ) -> Result<Self> {
         let props = phy.queue_family_properties();
         let mut queues = vec![0; props.len()];
         for q in info.queue_create_infos {
@@ -84,30 +85,33 @@ impl Device {
         }
         let handle = handle.unwrap();
         let fun = DeviceFn::new(phy.instance(), handle.borrow());
-        let device = Arc::new(Device {
+        Ok(Device {
             handle,
             fun,
             physical_device: phy.clone(),
             limits: phy.properties().limits,
             enabled: info.enabled_features.cloned().unwrap_or_default(),
-            memory_allocation_count: AtomicU32::new(0),
-            sampler_allocation_count: AtomicU32::new(0),
+            memory_allocation_count: 0.into(),
+            sampler_allocation_count: 0.into(),
             queues,
-        });
-        let queues = info
-            .queue_create_infos
-            .into_iter()
-            .map(|q| {
-                (0..q.queue_priorities.len())
-                    .map(|n| device.queue(q.queue_family_index, n))
-                    .collect()
-            })
-            .collect();
-        Ok((device, queues))
+            queues_taken: false.into(),
+        })
+    }
+
+    /// Return the device's queues. Will panic if called more than once.
+    pub fn take_queues(&self) -> Vec<Vec<Queue>> {
+        if self.queues_taken.swap(true, Ordering::Relaxed) {
+            panic!("Device::take_queues called more than once.");
+        }
+        self.queues
+            .iter()
+            .enumerate()
+            .map(|(i, &n)| (0..n).map(|n| self.queue(i as u32, n)).collect())
+            .collect()
     }
 }
 
-impl Device {
+impl Device<'_> {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkDevice> {
         self.handle.borrow()
@@ -125,7 +129,7 @@ impl Device {
         &self.physical_device
     }
     /// Returns the associated instance.
-    pub fn instance(&self) -> &Arc<Instance> {
+    pub fn instance(&self) -> &Instance {
         self.physical_device.instance()
     }
     /// Returns true if a queue with this family index and index exists.

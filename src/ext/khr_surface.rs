@@ -17,10 +17,11 @@ use crate::physical_device::PhysicalDevice;
 use crate::subobject::{Owner, Subobject};
 use crate::types::*;
 
-pub struct SurfaceLifetime {
+#[derive(Debug)]
+pub struct SurfaceLifetime<'i> {
     handle: Handle<VkSurfaceKHR>,
     fun: SurfaceKHRFn,
-    instance: Arc<Instance>,
+    instance: &'i Instance,
 }
 
 /// A
@@ -28,17 +29,11 @@ pub struct SurfaceLifetime {
 ///
 /// Can be created with [`crate::window::create_surface`].
 #[derive(Debug)]
-pub struct SurfaceKHR {
-    inner: Owner<SurfaceLifetime>,
+pub struct SurfaceKHR<'i> {
+    inner: Owner<SurfaceLifetime<'i>>,
 }
 
-impl std::fmt::Debug for SurfaceLifetime {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SurfaceResource").finish()
-    }
-}
-
-impl Drop for SurfaceLifetime {
+impl Drop for SurfaceLifetime<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.fun.destroy_surface_khr)(
@@ -50,9 +45,11 @@ impl Drop for SurfaceLifetime {
     }
 }
 
-impl SurfaceKHR {
+impl<'i> SurfaceKHR<'i> {
     /// Create a surface from an existing handle.
-    pub fn new(handle: Handle<VkSurfaceKHR>, instance: Arc<Instance>) -> Self {
+    pub fn new(
+        handle: Handle<VkSurfaceKHR>, instance: &'i Instance,
+    ) -> Self {
         Self {
             inner: Owner::new(SurfaceLifetime {
                 handle,
@@ -71,7 +68,7 @@ impl SurfaceKHR {
         self.inner.handle.borrow_mut()
     }
     /// Extend the lifetime of the surface until the returned object is dropped.
-    pub fn resource(&self) -> Subobject<SurfaceLifetime> {
+    pub fn resource(&self) -> Subobject<SurfaceLifetime<'i>> {
         Subobject::new(&self.inner)
     }
 
@@ -82,7 +79,7 @@ impl SurfaceKHR {
         &self, phy: &PhysicalDevice, queue_family: u32,
     ) -> Result<bool> {
         let mut result = Bool::False;
-        assert!(Arc::ptr_eq(&self.inner.instance, phy.instance()));
+        assert_eq!(self.inner.instance, phy.instance());
         if (queue_family as usize) >= phy.queue_family_properties().len() {
             return Err(Error::OutOfBounds);
         }
@@ -101,7 +98,7 @@ impl SurfaceKHR {
     pub fn capabilities(
         &self, phy: &PhysicalDevice,
     ) -> Result<SurfaceCapabilitiesKHR> {
-        assert!(Arc::ptr_eq(&self.inner.instance, phy.instance()));
+        assert_eq!(self.inner.instance, phy.instance());
         // Check phy support?
         let mut result = MaybeUninit::uninit();
         unsafe {
@@ -118,7 +115,7 @@ impl SurfaceKHR {
     pub fn surface_formats(
         &self, phy: &PhysicalDevice,
     ) -> Result<Vec<SurfaceFormatKHR>> {
-        assert!(Arc::ptr_eq(&self.inner.instance, phy.instance()));
+        assert_eq!(self.inner.instance, phy.instance());
         let mut len = 0;
         let mut result = vec![];
         unsafe {
@@ -193,5 +190,11 @@ impl SurfaceKHRFn {
                 ),
             }
         }
+    }
+}
+
+impl std::fmt::Debug for SurfaceKHRFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SurfaceKHRFn").finish()
     }
 }

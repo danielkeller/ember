@@ -48,7 +48,7 @@ pub struct InstanceFn {
     pub enumerate_physical_devices: unsafe extern "system" fn(
         Ref<VkInstance>,
         &mut u32,
-        Option<ArrayMut<MaybeUninit<Handle<VkPhysicalDevice>>>>,
+        Option<ArrayMut<MaybeUninit<Ref<VkPhysicalDevice>>>>,
     ) -> VkResult,
     pub get_physical_device_properties: unsafe extern "system" fn(
         Ref<VkPhysicalDevice>,
@@ -696,7 +696,7 @@ impl Instance {
     }
 }
 
-impl Device {
+impl Device<'_> {
     /// Loads device function. Panics if the string is not null-terminated or the
     /// function was not found.
     #[doc = crate::man_link!(vkGetDeviceProcAddr)]

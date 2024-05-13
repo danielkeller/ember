@@ -12,7 +12,6 @@
 //! additional dependencies.
 
 use std::ptr::NonNull;
-use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::ext::{self, KHRXlibSurface};
@@ -100,9 +99,9 @@ pub fn presentation_support(
 
 /// Create a surface for `window` with the appropriate extension for the current
 /// platform.
-pub fn create_surface(
-    instance: &Arc<Instance>, window: &impl HasRawWindowHandle,
-) -> Result<SurfaceKHR> {
+pub fn create_surface<'i>(
+    instance: &'i Instance, window: &impl HasRawWindowHandle,
+) -> Result<SurfaceKHR<'i>> {
     match window.raw_window_handle() {
         #[cfg(any(target_os = "macos"))]
         RawWindowHandle::AppKit(handle) => {

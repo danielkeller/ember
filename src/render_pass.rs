@@ -14,16 +14,16 @@ use crate::types::*;
 /// A
 #[doc = crate::spec_link!("render pass", "8", "renderpass")]
 #[derive(Debug)]
-pub struct RenderPass {
+pub struct RenderPass<'d> {
     handle: Handle<VkRenderPass>,
     compat: RenderPassCompat,
-    pub(crate) device: Arc<Device>,
+    pub(crate) device: &'d Device<'d>,
 }
 
-impl RenderPass {
+impl<'d> RenderPass<'d> {
     #[doc = crate::man_link!(vkCreateRenderPass)]
     pub fn new(
-        device: &Arc<Device>, info: &RenderPassCreateInfo,
+        device: &'d Device, info: &RenderPassCreateInfo,
     ) -> Result<Arc<Self>> {
         for subpass in info.subpasses {
             if subpass.color_attachments.len()
@@ -43,7 +43,7 @@ impl RenderPass {
             )?;
         }
         let handle = handle.unwrap();
-        Ok(Arc::new(Self { handle, compat, device: device.clone() }))
+        Ok(Arc::new(Self { handle, compat, device }))
     }
 
     /// Borrows the inner Vulkan handle.
@@ -55,8 +55,8 @@ impl RenderPass {
         self.compat.subpasses.len() as u32
     }
     /// Returns the associated device.
-    pub fn device(&self) -> &Arc<Device> {
-        &self.device
+    pub fn device(&self) -> &Device {
+        self.device
     }
     /// Returns true if this render pass is compatible with `other`
     pub fn compatible(&self, other: &Self) -> bool {
@@ -64,7 +64,7 @@ impl RenderPass {
     }
 }
 
-impl Drop for RenderPass {
+impl Drop for RenderPass<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_render_pass)(

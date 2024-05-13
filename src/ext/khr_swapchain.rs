@@ -19,12 +19,12 @@ use crate::semaphore::{Semaphore, SemaphoreSignaller};
 use crate::subobject::{Owner, Subobject};
 use crate::types::*;
 
-use super::khr_surface::{SurfaceKHR, SurfaceLifetime};
+use super::khr_surface::SurfaceKHR;
 
 /// Whether to pass a previous swapchain to create the new one from.
-pub enum CreateSwapchainFrom {
-    OldSwapchain(SwapchainKHR),
-    Surface(SurfaceKHR),
+pub enum CreateSwapchainFrom<'i> {
+    OldSwapchain(SwapchainKHR<'i>),
+    Surface(SurfaceKHR<'i>),
 }
 
 #[doc = crate::man_link!(VkSwapchainCreateInfoKHR)]
@@ -67,22 +67,23 @@ impl<'a> Default for SwapchainCreateInfoKHR<'a> {
 /// A
 #[doc = crate::spec_link!("swapchain", "33", "_wsi_swapchain")]
 #[derive(Debug)]
-pub struct SwapchainKHR {
+pub struct SwapchainKHR<'d> {
     images: Vec<(Arc<Image>, bool)>,
-    res: Owner<SwapchainImages>,
-    surface: SurfaceKHR,
+    res: Owner<SwapchainImages<'d>>,
+    surface: SurfaceKHR<'d>,
 }
 
 // Conceptually this owns the images, but it's also used to delay destruction
 // of the swapchain until it's no longer used by the images.
-pub(crate) struct SwapchainImages {
+#[derive(Debug)]
+pub(crate) struct SwapchainImages<'d> {
     handle: Handle<VkSwapchainKHR>,
     fun: SwapchainKHRFn,
-    device: Arc<Device>,
-    _surface: Subobject<SurfaceLifetime>,
+    device: &'d Device<'d>,
+    // _surface: Subobject<SurfaceLifetime<'d>>, // FIXME
 }
 
-impl SwapchainKHR {
+impl<'d> SwapchainKHR<'d> {
     /// If `create_from` is [`CreateSwapchainFrom::OldSwapchain`], images in
     /// that swapchain that aren't acquired by the application are deleted. If
     /// any references remain to those images, returns
@@ -91,7 +92,7 @@ impl SwapchainKHR {
     ///
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
     pub fn new(
-        device: &Arc<Device>, create_from: CreateSwapchainFrom,
+        device: &'d Device, create_from: CreateSwapchainFrom<'d>,
         info: SwapchainCreateInfoKHR,
     ) -> Result<Self> {
         let (mut surface, fun, mut old_swapchain) = match create_from {
@@ -161,7 +162,7 @@ impl SwapchainKHR {
             handle,
             fun,
             device: device.clone(),
-            _surface: surface.resource(),
+            // _surface: surface.resource(),
         });
         let images = images
             .into_iter()
@@ -185,7 +186,7 @@ impl SwapchainKHR {
     }
 }
 
-impl Drop for SwapchainImages {
+impl Drop for SwapchainImages<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.fun.destroy_swapchain_khr)(
@@ -197,12 +198,6 @@ impl Drop for SwapchainImages {
     }
 }
 
-impl std::fmt::Debug for SwapchainImages {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SwapchainImages").field("handle", &self.handle).finish()
-    }
-}
-
 /// Whether the swapchain images are still optimal.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ImageOptimality {
@@ -210,13 +205,13 @@ pub enum ImageOptimality {
     Suboptimal,
 }
 
-impl SwapchainKHR {
+impl<'i> SwapchainKHR<'i> {
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkSwapchainKHR> {
         self.res.handle.borrow_mut()
     }
     /// Returns the associated surface.
-    pub fn surface(&self) -> &SurfaceKHR {
+    pub fn surface(&self) -> &SurfaceKHR<'i> {
         &self.surface
     }
 
@@ -298,7 +293,7 @@ impl SwapchainKHR {
         queue.add_resource(wait.take_signaller()); // Always needed?
         queue.add_resource(wait.inner.clone());
         // Actual present
-        queue.add_resource(Subobject::new(&self.res).erase());
+        // queue.add_resource(Subobject::new(&self.res).erase()); // FIXME
         Ok(is_optimal)
     }
 }
@@ -357,5 +352,11 @@ impl SwapchainKHRFn {
                 ),
             }
         }
+    }
+}
+
+impl std::fmt::Debug for SwapchainKHRFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SwapchainKHRFn").finish()
     }
 }

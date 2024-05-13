@@ -17,17 +17,17 @@ use crate::types::*;
 /// be freely cloned.
 ///
 /// Returned from [`Instance::enumerate_physical_devices`]
-#[derive(Debug)]
-pub struct PhysicalDevice {
-    handle: Handle<VkPhysicalDevice>,
-    instance: Arc<Instance>,
+#[derive(Debug, Clone, Copy)]
+pub struct PhysicalDevice<'i> {
+    handle: Ref<'i, VkPhysicalDevice>,
+    instance: &'i Instance,
 }
 
 impl Instance {
     /// Returns the instance's physical devices.
     #[doc = crate::man_link!(vkEnumeratePhysicalDevices)]
     pub fn enumerate_physical_devices(
-        self: &Arc<Self>,
+        self: &Self,
     ) -> Result<Vec<PhysicalDevice>> {
         let mut len = 0;
         let mut result = Vec::new();
@@ -52,29 +52,18 @@ impl Instance {
     }
 }
 
-impl PhysicalDevice {
+impl<'i> PhysicalDevice<'i> {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkPhysicalDevice> {
-        self.handle.borrow()
+        self.handle
     }
     /// Gets the instance.
-    pub fn instance(&self) -> &Arc<Instance> {
+    pub fn instance(&self) -> &'i Instance {
         &self.instance
     }
 }
 
-impl Clone for PhysicalDevice {
-    fn clone(&self) -> Self {
-        Self {
-            // Safety: phyiscal device has no externally synchronized functions
-            // and is not freed
-            handle: unsafe { self.handle.clone() },
-            instance: self.instance.clone(),
-        }
-    }
-}
-
-impl PhysicalDevice {
+impl PhysicalDevice<'_> {
     #[doc = crate::man_link!(vkGetPhysicalDeviceProperties)]
     pub fn properties(&self) -> PhysicalDeviceProperties {
         let mut result = MaybeUninit::uninit();

@@ -284,7 +284,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let device_extensions = required_device_extensions(&phy)?;
-    let (device, mut queues) = vk::Device::new(
+    let device = vk::Device::new(
         &phy,
         &vk::DeviceCreateInfo {
             queue_create_infos: vk::slice(&[vk::DeviceQueueCreateInfo {
@@ -301,7 +301,7 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         },
     )?;
-    let mut queue = queues.remove(0).remove(0);
+    let mut queue = device.take_queues()[0][0];
 
     let mut acquire_sem = vk::Semaphore::new(&device)?;
     let mut fence = Some(vk::Fence::new(&device)?);
