@@ -50,6 +50,9 @@ pub const METAL_SURFACE: Str<'static> =
 /// VK_KHR_get_physical_device_properties2 instance extension name
 pub const GET_PHYSICAL_DEVICE_PROPERTIES2: Str<'static> =
     unsafe { Str::new_unchecked(b"VK_KHR_get_physical_device_properties2\0") };
+/// VK_KHR_portability_enumeration instance extension name
+pub const PORTABILITY_ENUMERATION: Str<'static> =
+    unsafe { Str::new_unchecked(b"VK_KHR_portability_enumeration\0") };
 
 // Device level extensions
 

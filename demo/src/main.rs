@@ -63,17 +63,16 @@ struct MVP {
     proj: Mat4,
 }
 
-fn required_instance_extensions() -> anyhow::Result<&'static [vk::Str<'static>]>
-{
-    let exts = vk::instance_extension_properties()?;
-    if exts
-        .iter()
-        .any(|e| e.extension_name == vk::ext::GET_PHYSICAL_DEVICE_PROPERTIES2)
-    {
-        Ok(std::slice::from_ref(&vk::ext::GET_PHYSICAL_DEVICE_PROPERTIES2))
-    } else {
-        Ok(&[])
+fn required_instance_extensions() -> anyhow::Result<Vec<vk::Str<'static>>> {
+    let mut result = vec![];
+    for ext in vk::instance_extension_properties()? {
+        if ext.extension_name == vk::ext::GET_PHYSICAL_DEVICE_PROPERTIES2 {
+            result.push(vk::ext::GET_PHYSICAL_DEVICE_PROPERTIES2)
+        } else if ext.extension_name == vk::ext::PORTABILITY_ENUMERATION {
+            result.push(vk::ext::PORTABILITY_ENUMERATION);
+        }
     }
+    Ok(result)
 }
 
 fn pick_physical_device(phys: &[vk::PhysicalDevice]) -> vk::PhysicalDevice {
@@ -263,6 +262,11 @@ fn main() -> anyhow::Result<()> {
     instance_exts.extend(required_instance_extensions()?.iter());
     let inst = vk::Instance::new(&vk::InstanceCreateInfo {
         enabled_extension_names: instance_exts.as_slice().into(),
+        flags: if instance_exts.contains(&vk::ext::PORTABILITY_ENUMERATION) {
+            vk::InstanceCreateFlags::INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+        } else {
+            Default::default()
+        },
         ..Default::default()
     })?;
 
@@ -431,6 +435,7 @@ fn main() -> anyhow::Result<()> {
         },
     )?;
 
+    // TODO: rust-analyzer doesn't like this now and shaderc is annoying, maybe switching to WGSL and naga is nicer?
     let vertex_shader = vk::ShaderModule::new(
         &device,
         include_spirv!("shaders/triangle.vert", vert),

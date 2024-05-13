@@ -70,6 +70,13 @@ impl Default for Str<'_> {
     }
 }
 
+impl PartialEq<Str<'_>> for Str<'_> {
+    fn eq(&self, other: &Str<'_>) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+impl Eq for Str<'_> {}
+
 // TODO: User-defined unsize, once the compiler allows that.
 
 impl<'a> From<&'a CStr> for Str<'a> {

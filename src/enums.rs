@@ -47,8 +47,10 @@ impl Bool {
 bitflags! {
     #[repr(transparent)]
     #[derive(Default)]
-    /// Reserved
-    pub struct InstanceCreateFlags: u32 {}
+    #[doc = crate::man_link!(VkInstanceCreateFlagBits)]
+    pub struct InstanceCreateFlags: u32 {
+        const INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR = 0x00000001;
+    }
 }
 
 #[repr(transparent)]
