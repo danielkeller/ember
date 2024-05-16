@@ -152,27 +152,26 @@ impl<'d> DescriptorSetUpdateBuilder<'d> {
 
 /// A builder to update a single descriptor set.
 #[must_use = "This object does nothing until end() is called."]
-pub struct DescriptorSetUpdate<'a> {
-    pub(crate) updates: DescriptorSetUpdates<'a>,
-    pub(crate) set: &'a mut DescriptorSet<'a>,
+pub struct DescriptorSetUpdate<'s, 'u> {
+    pub(crate) updates: DescriptorSetUpdates<'u>,
+    pub(crate) set: &'u mut DescriptorSet<'s>,
 }
 
 impl<'a> DescriptorSetUpdates<'a> {
     /// Add updates to the given set to the builder.
-    pub fn dst_set(
-        self, set: &'a mut DescriptorSet<'a>,
-    ) -> DescriptorSetUpdate<'a> {
+    pub fn dst_set<'s>(
+        self, set: &'a mut DescriptorSet<'s>,
+    ) -> DescriptorSetUpdate<'s, 'a> {
         assert_eq!(&*set.layout.device, self.device);
         DescriptorSetUpdate { updates: self, set }
     }
-    pub(crate) fn end(self) {
-        // for res in self.resources {
-        //     self.dst_sets[res.set].resources[res.binding][res.element] =
-        //         Some(res.resource);
-        // }
+    pub(crate) fn end(mut self) {
+        for res in self.resources {
+            self.dst_sets[res.set].inited[res.binding][res.element] = true;
+        }
         unsafe {
             (self.device.fun.update_descriptor_sets)(
-                self.device.borrow(),
+                self.device.handle(),
                 self.writes.len() as u32,
                 Array::from_slice(&self.writes),
                 self.copies.len() as u32,
@@ -184,7 +183,7 @@ impl<'a> DescriptorSetUpdates<'a> {
 
 #[doc = crate::man_link!(VkDescriptorBufferInfo)]
 pub struct DescriptorBufferInfo<'a> {
-    pub buffer: &'a Arc<Buffer<'a>>,
+    pub buffer: &'a Buffer<'a>,
     pub offset: u64,
     pub range: Option<u64>,
 }
@@ -207,7 +206,7 @@ macro_rules! image_checks {
     };
 }
 
-impl<'a> DescriptorSetUpdate<'a> {
+impl<'u, 's: 'u> DescriptorSetUpdate<'u, 's> {
     /// Finish the builder and call vkUpdateDescriptorSets.
     #[doc = crate::man_link!(vkUpdateDescriptorSets)]
     pub fn end(mut self) {
@@ -215,24 +214,24 @@ impl<'a> DescriptorSetUpdate<'a> {
         self.updates.end()
     }
 
-    pub(crate) fn set_ref(&mut self) -> Mut<'a, VkDescriptorSet> {
+    pub(crate) fn set_ref(&mut self) -> Mut<'u, VkDescriptorSet> {
         // Safety: The set is kept mutably borrowed while the builder
         // is alive, and one call to vkUpdateDescriptorSets counts as
         // a single use as far as external synchronization is concerned
-        unsafe { self.set.handle.borrow_mut().reborrow_mut_unchecked() }
+        unsafe { self.set.handle.handle_mut().reborrow_mut_unchecked() }
     }
 
     /// Add updates to the given set to the builder.
     pub fn dst_set(
-        mut self, set: &'a mut DescriptorSet<'a>,
-    ) -> DescriptorSetUpdate<'a> {
+        mut self, set: &'u mut DescriptorSet<'s>,
+    ) -> DescriptorSetUpdate<'u, 's> {
         self.updates.dst_sets.push(self.set);
         self.updates.dst_set(set)
     }
 
     pub(crate) fn buffers_impl(
         mut self, dst_binding: u32, dst_array_element: u32,
-        buffers: &'_ [DescriptorBufferInfo<'a>], max_range: u32,
+        buffers: &'_ [DescriptorBufferInfo<'s>], max_range: u32,
         descriptor_type: DescriptorType,
     ) -> Result<Self> {
         let iter = BindingIter::new(
@@ -284,7 +283,7 @@ impl<'a> DescriptorSetUpdate<'a> {
     #[doc = buffer_checks!()]
     pub fn uniform_buffers(
         self, dst_binding: u32, dst_array_element: u32,
-        buffers: &'_ [DescriptorBufferInfo<'a>],
+        buffers: &'_ [DescriptorBufferInfo<'s>],
     ) -> Result<Self> {
         let max_range = self.updates.device.limits().max_uniform_buffer_range;
         self.buffers_impl(
@@ -299,7 +298,7 @@ impl<'a> DescriptorSetUpdate<'a> {
     #[doc = buffer_checks!()]
     pub fn storage_buffers(
         self, dst_binding: u32, dst_array_element: u32,
-        buffers: &'_ [DescriptorBufferInfo<'a>],
+        buffers: &'_ [DescriptorBufferInfo<'s>],
     ) -> Result<Self> {
         let max_range = self.updates.device.limits().max_storage_buffer_range;
         self.buffers_impl(
@@ -314,7 +313,7 @@ impl<'a> DescriptorSetUpdate<'a> {
     #[doc = buffer_checks!()]
     pub fn uniform_buffers_dynamic(
         self, dst_binding: u32, dst_array_element: u32,
-        buffers: &'_ [DescriptorBufferInfo<'a>],
+        buffers: &'_ [DescriptorBufferInfo<'s>],
     ) -> Result<Self> {
         let max_range = self.updates.device.limits().max_uniform_buffer_range;
         self.buffers_impl(
@@ -329,7 +328,7 @@ impl<'a> DescriptorSetUpdate<'a> {
     #[doc = buffer_checks!()]
     pub fn storage_buffers_dynamic(
         self, dst_binding: u32, dst_array_element: u32,
-        buffers: &'_ [DescriptorBufferInfo<'a>],
+        buffers: &'_ [DescriptorBufferInfo<'s>],
     ) -> Result<Self> {
         let max_range = self.updates.device.limits().max_storage_buffer_range;
         self.buffers_impl(
@@ -347,7 +346,7 @@ impl<'a> DescriptorSetUpdate<'a> {
     /// have immutable samplers.
     pub fn samplers(
         mut self, dst_binding: u32, dst_array_element: u32,
-        samplers: &[&'a Arc<Sampler>],
+        samplers: &[&'s Sampler],
     ) -> Result<Self> {
         let iter = BindingIter::new(
             &self.set.layout.bindings,
@@ -393,7 +392,7 @@ impl<'a> DescriptorSetUpdate<'a> {
 
     pub(crate) fn images_impl(
         mut self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'a Arc<ImageView>, ImageLayout)],
+        images: &[(&'s ImageView, ImageLayout)],
         descriptor_type: DescriptorType,
     ) -> Result<Self> {
         let iter = BindingIter::new(
@@ -440,7 +439,7 @@ impl<'a> DescriptorSetUpdate<'a> {
     #[doc = image_checks!()]
     pub fn sampled_images(
         self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'a Arc<ImageView>, ImageLayout)],
+        images: &[(&'s ImageView, ImageLayout)],
     ) -> Result<Self> {
         self.images_impl(
             dst_binding,
@@ -453,7 +452,7 @@ impl<'a> DescriptorSetUpdate<'a> {
     #[doc = image_checks!()]
     pub fn storage_images(
         self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'a Arc<ImageView>, ImageLayout)],
+        images: &[(&'s ImageView, ImageLayout)],
     ) -> Result<Self> {
         self.images_impl(
             dst_binding,
@@ -466,7 +465,7 @@ impl<'a> DescriptorSetUpdate<'a> {
     #[doc = image_checks!()]
     pub fn input_attachments(
         self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'a Arc<ImageView>, ImageLayout)],
+        images: &[(&'s ImageView, ImageLayout)],
     ) -> Result<Self> {
         self.images_impl(
             dst_binding,
@@ -480,7 +479,7 @@ impl<'a> DescriptorSetUpdate<'a> {
     #[doc = image_checks!()]
     pub fn combined_image_samplers(
         mut self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'a Arc<ImageView>, ImageLayout)],
+        images: &[(&'s ImageView, ImageLayout)],
     ) -> Result<Self> {
         let iter = BindingIter::new(
             &self.set.layout.bindings,

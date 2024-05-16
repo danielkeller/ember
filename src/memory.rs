@@ -44,7 +44,7 @@ impl<'d> DeviceMemory<'d> {
         let mut handle = None;
         let result = unsafe {
             (device.fun.allocate_memory)(
-                device.borrow(),
+                device.handle(),
                 &MemoryAllocateInfo {
                     stype: Default::default(),
                     next: Default::default(),
@@ -75,7 +75,7 @@ impl<'d> DeviceMemory<'d> {
     }
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkDeviceMemory> {
-        self.inner.handle.borrow_mut()
+        self.inner.handle.handle_mut()
     }
     /// Returns the associated device.
     pub fn device(&self) -> &Device {
@@ -99,8 +99,8 @@ impl Drop for MemoryLifetime<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.free_memory)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }
@@ -146,8 +146,8 @@ impl<'d> DeviceMemory<'d> {
         let mut ptr = std::ptr::null_mut();
         unsafe {
             if let Err(err) = (inner.device.fun.map_memory)(
-                inner.device.borrow(),
-                inner.handle.borrow_mut(),
+                inner.device.handle(),
+                inner.handle.handle_mut(),
                 offset,
                 size as u64,
                 Default::default(),
@@ -175,8 +175,8 @@ impl<'d> MappedMemory<'d> {
         let inner = &mut *self.memory.inner;
         unsafe {
             (inner.device.fun.unmap_memory)(
-                inner.device.borrow(),
-                inner.handle.borrow_mut(),
+                inner.device.handle(),
+                inner.handle.handle_mut(),
             )
         }
     }

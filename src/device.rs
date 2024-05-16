@@ -49,8 +49,8 @@ impl std::hash::Hash for Device<'_> {
 impl Drop for Device<'_> {
     fn drop(&mut self) {
         unsafe {
-            (self.fun.device_wait_idle)(self.handle.borrow_mut()).unwrap();
-            (self.fun.destroy_device)(self.handle.borrow_mut(), None);
+            (self.fun.device_wait_idle)(self.handle.handle_mut()).unwrap();
+            (self.fun.destroy_device)(self.handle.handle_mut(), None);
         }
     }
 }
@@ -113,7 +113,7 @@ impl<'i> Device<'i> {
 
 impl Device<'_> {
     /// Borrows the inner Vulkan handle.
-    pub fn borrow(&self) -> Ref<VkDevice> {
+    pub fn handle(&self) -> Ref<VkDevice> {
         self.handle.borrow()
     }
     /// Returns the limits of the device.

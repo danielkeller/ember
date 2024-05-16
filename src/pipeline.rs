@@ -22,21 +22,21 @@ use crate::types::*;
 /// A
 #[doc = crate::spec_link!("pipeline layout", "14", "descriptorsets-pipelinelayout")]
 #[derive(Debug)]
-pub struct PipelineLayout<'d> {
+pub struct PipelineLayout<'a> {
     handle: Handle<VkPipelineLayout>,
-    set_layouts: Vec<Arc<DescriptorSetLayout<'d>>>,
+    set_layouts: Vec<&'a DescriptorSetLayout<'a>>,
     push_constant_ranges: Vec<PushConstantRange>,
     push_constant_voids: Vec<Range<u32>>,
-    device: &'d Device<'d>,
+    device: &'a Device<'a>,
 }
 
-impl<'d> PipelineLayout<'d> {
+impl<'a> PipelineLayout<'a> {
     #[doc = crate::man_link!(vkCreatePipelineLayout)]
     pub fn new(
-        device: &'d Device, flags: PipelineLayoutCreateFlags,
-        set_layouts: Vec<Arc<DescriptorSetLayout<'d>>>,
+        device: &'a Device, flags: PipelineLayoutCreateFlags,
+        set_layouts: Vec<&'a DescriptorSetLayout>,
         push_constant_ranges: Vec<PushConstantRange>,
-    ) -> Result<Arc<PipelineLayout<'d>>> {
+    ) -> Result<Arc<PipelineLayout<'a>>> {
         let lim = &device.limits();
         if set_layouts.len() > lim.max_bound_descriptor_sets as usize {
             return Err(Error::LimitExceeded);
@@ -118,7 +118,7 @@ impl<'d> PipelineLayout<'d> {
             let set_layouts =
                 &set_layouts.iter().map(|l| l.borrow()).collect::<Vec<_>>();
             (device.fun.create_pipeline_layout)(
-                device.borrow(),
+                device.handle(),
                 &PipelineLayoutCreateInfo {
                     flags,
                     set_layouts: set_layouts.into(),
@@ -162,7 +162,7 @@ fn find_voids(ranges: &[PushConstantRange]) -> Result<Vec<Range<u32>>> {
 }
 
 fn matching_resources(
-    sets: &[Arc<DescriptorSetLayout>], descriptor_type: DescriptorType,
+    sets: &[&DescriptorSetLayout], descriptor_type: DescriptorType,
     stage_flags: ShaderStageFlags,
 ) -> u32 {
     sets.iter().map(|s| s.num_bindings(descriptor_type, stage_flags)).sum()
@@ -172,8 +172,8 @@ impl Drop for PipelineLayout<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_pipeline_layout)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }
@@ -186,7 +186,7 @@ impl PipelineLayout<'_> {
         self.handle.borrow()
     }
     /// Returns the list of descriptor set layouts.
-    pub fn layouts(&self) -> &[Arc<DescriptorSetLayout>] {
+    pub fn layouts(&self) -> &[&DescriptorSetLayout] {
         &self.set_layouts
     }
     /// Checks that the push constants are in bounds and `stage_flags` are
@@ -322,7 +322,7 @@ impl<'d> Pipeline<'d> {
         let mut handle = MaybeUninit::uninit();
         unsafe {
             (info.layout.device.fun.create_graphics_pipelines)(
-                info.layout.device.borrow(),
+                info.layout.device.handle(),
                 info.cache.map(|c| c.handle.borrow()),
                 1,
                 std::array::from_ref(&vk_info).into(),
@@ -357,7 +357,7 @@ impl<'d> Pipeline<'d> {
         let mut handle = MaybeUninit::uninit();
         unsafe {
             (layout.device.fun.create_compute_pipelines)(
-                layout.device.borrow(),
+                layout.device.handle(),
                 cache.map(|c| c.handle.borrow()),
                 1,
                 std::array::from_ref(&info).into(),
@@ -400,8 +400,8 @@ impl Drop for Pipeline<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.layout.device.fun.destroy_pipeline)(
-                self.layout.device.borrow(),
-                self.handle.borrow_mut(),
+                self.layout.device.handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }
@@ -447,7 +447,7 @@ impl<'d> PipelineCache<'d> {
             initial_data: data.into(),
         };
         (device.fun.create_pipeline_cache)(
-            device.borrow(),
+            device.handle(),
             &info,
             None,
             &mut handle,
@@ -462,14 +462,14 @@ impl<'d> PipelineCache<'d> {
         loop {
             unsafe {
                 (self.device.fun.get_pipeline_cache_data)(
-                    self.device.borrow(),
+                    self.device.handle(),
                     self.handle.borrow(),
                     &mut len,
                     None,
                 )?;
                 result.reserve(len);
                 let maybe_worked = (self.device.fun.get_pipeline_cache_data)(
-                    self.device.borrow(),
+                    self.device.handle(),
                     self.handle.borrow(),
                     &mut len,
                     ArrayMut::from_slice(result.spare_capacity_mut()),
@@ -492,8 +492,8 @@ impl Drop for PipelineCache<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_pipeline_cache)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }

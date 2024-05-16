@@ -6,16 +6,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::borrow::Borrow;
-use std::usize;
-
 use crate::buffer::Buffer;
 use crate::descriptor_set::DescriptorSet;
 use crate::enums::*;
 use crate::error::{Error, Result};
 use crate::ffi::Array;
 use crate::pipeline::{Pipeline, PipelineLayout};
-use crate::types::*;
 
 use super::{
     Bindings, CommandRecording, RenderPassRecording, SecondaryCommandRecording,
@@ -54,7 +50,7 @@ impl<'a> CommandRecording<'a> {
         }
         unsafe {
             (self.pool.device.fun.cmd_bind_pipeline)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
                 bind_point,
                 pipeline.borrow(),
             )
@@ -122,7 +118,7 @@ impl<'a> CommandRecording<'a> {
 
         unsafe {
             (self.pool.device.fun.cmd_bind_vertex_buffers)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
                 first_binding,
                 N as u32,
                 vkbuffers.into(),
@@ -143,7 +139,7 @@ impl<'a> CommandRecording<'a> {
         }
         unsafe {
             (self.pool.device.fun.cmd_bind_index_buffer)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
                 buffer.borrow(),
                 offset,
                 index_type,
@@ -167,7 +163,7 @@ impl<'a> RenderPassRecording<'a> {
     #[doc = crate::man_link!(vkCmdBindDescriptorSets)]
     pub fn bind_descriptor_sets(
         &mut self, pipeline_bind_point: PipelineBindPoint,
-        layout: &PipelineLayout, first_set: u32, sets: &[&Arc<DescriptorSet>],
+        layout: &'a PipelineLayout, first_set: u32, sets: &[&'a DescriptorSet],
         dynamic_offsets: &[u32],
     ) -> Result<()> {
         self.rec.bind_descriptor_sets(
@@ -193,7 +189,7 @@ impl<'a> SecondaryCommandRecording<'a> {
     #[doc = crate::man_link!(vkCmdBindDescriptorSets)]
     pub fn bind_descriptor_sets(
         &mut self, pipeline_bind_point: PipelineBindPoint,
-        layout: &PipelineLayout, first_set: u32, sets: &[&Arc<DescriptorSet>],
+        layout: &'a PipelineLayout, first_set: u32, sets: &[&'a DescriptorSet],
         dynamic_offsets: &[u32],
     ) -> Result<()> {
         self.rec.bind_descriptor_sets(
@@ -208,7 +204,7 @@ impl<'a> SecondaryCommandRecording<'a> {
 
 impl<'a> Bindings<'a> {
     fn bind_descriptor_sets(
-        &mut self, layout: &PipelineLayout, begin: usize, sets: usize,
+        &mut self, layout: &'a PipelineLayout, begin: usize, sets: usize,
     ) {
         let end = begin + sets;
         let layouts = &layout.layouts()[0..end];
@@ -246,15 +242,15 @@ impl<'a> CommandRecording<'a> {
     #[doc = crate::man_link!(vkCmdBindDescriptorSets)]
     pub fn bind_descriptor_sets(
         &mut self, pipeline_bind_point: PipelineBindPoint,
-        layout: &PipelineLayout, first_set: u32, sets: &[&Arc<DescriptorSet>],
+        layout: &'a PipelineLayout, first_set: u32, sets: &[&'a DescriptorSet],
         dynamic_offsets: &[u32],
     ) -> Result<()> {
         // Max binding is already checked by the layout
-        if sets.iter().map(|s| s.layout()).ne(layout
-            .layouts()
+        let layouts = layout.layouts().iter().copied();
+        if sets
             .iter()
-            .skip(first_set as usize)
-            .take(sets.len()))
+            .map(|s| s.layout())
+            .ne(layouts.skip(first_set as usize).take(sets.len()))
             || sets
                 .iter()
                 .map(|s| s.layout().num_dynamic_offsets())
@@ -278,14 +274,11 @@ impl<'a> CommandRecording<'a> {
             );
         }
 
-        for &set in sets {
-            self.add_resource(set.clone());
-        }
         let sets =
-            self.scratch.alloc_slice_fill_iter(sets.iter().map(|s| s.borrow()));
+            self.scratch.alloc_slice_fill_iter(sets.iter().map(|s| s.handle()));
         unsafe {
             (self.pool.device.fun.cmd_bind_descriptor_sets)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
                 pipeline_bind_point,
                 layout.handle(),
                 first_set,
@@ -342,7 +335,7 @@ impl<'a> CommandRecording<'a> {
         }
         unsafe {
             (self.pool.device.fun.cmd_push_constants)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
                 layout.handle(),
                 stage_flags,
                 offset,

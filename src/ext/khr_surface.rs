@@ -38,7 +38,7 @@ impl Drop for SurfaceLifetime<'_> {
         unsafe {
             (self.fun.destroy_surface_khr)(
                 self.instance.handle(),
-                self.handle.borrow_mut(),
+                self.handle.handle_mut(),
                 None,
             )
         }
@@ -65,7 +65,7 @@ impl<'i> SurfaceKHR<'i> {
     }
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkSurfaceKHR> {
-        self.inner.handle.borrow_mut()
+        self.inner.handle.handle_mut()
     }
     /// Extend the lifetime of the surface until the returned object is dropped.
     pub fn resource(&self) -> Subobject<SurfaceLifetime<'i>> {

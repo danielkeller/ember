@@ -37,7 +37,7 @@ impl<'d> Fence<'d> {
         let mut handle = None;
         unsafe {
             (device.fun.create_fence)(
-                device.borrow(),
+                device.handle(),
                 &Default::default(),
                 None,
                 &mut handle,
@@ -52,8 +52,8 @@ impl Drop for Fence<'_> {
         if let Some(handle) = &mut self.handle {
             unsafe {
                 (self.device.fun.destroy_fence)(
-                    self.device.borrow(),
-                    handle.borrow_mut(),
+                    self.device.handle(),
+                    handle.handle_mut(),
                     None,
                 )
             }
@@ -64,7 +64,7 @@ impl Drop for Fence<'_> {
 impl<'d> Fence<'d> {
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkFence> {
-        self.handle.as_mut().unwrap().borrow_mut()
+        self.handle.as_mut().unwrap().handle_mut()
     }
     pub(crate) fn into_pending(
         mut self, resources: Cleanup,
@@ -89,7 +89,7 @@ impl<'d> PendingFence<'d> {
     pub fn wait(mut self) -> Result<Fence<'d>> {
         unsafe {
             (self.device.fun.wait_for_fences)(
-                self.device.borrow(),
+                self.device.handle(),
                 1,
                 (&[self.handle.borrow()]).into(),
                 true.into(),
@@ -99,10 +99,10 @@ impl<'d> PendingFence<'d> {
         self.resources.cleanup();
         unsafe {
             (self.device.fun.reset_fences)(
-                self.device.borrow(),
+                self.device.handle(),
                 1,
                 // Safe because the the outer structure is owned here
-                (&[self.handle.borrow_mut()]).into(),
+                (&[self.handle.handle_mut()]).into(),
             )?;
         }
         Ok(Fence { handle: Some(self.handle), device: self.device })

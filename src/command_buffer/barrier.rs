@@ -129,7 +129,7 @@ impl<'a> CommandRecording<'a> {
     ) {
         unsafe {
             (self.pool.device.fun.cmd_pipeline_barrier)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
                 src_stage_mask,
                 dst_stage_mask,
                 dependency_flags,
@@ -152,7 +152,7 @@ impl<'a> CommandRecording<'a> {
     ) {
         unsafe {
             (self.pool.device.fun.cmd_pipeline_barrier)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
                 src_stage_mask,
                 dst_stage_mask,
                 Default::default(),
@@ -192,7 +192,7 @@ impl<'a> CommandRecording<'a> {
                 subresource_range: Default::default(),
             };
             (self.pool.device.fun.cmd_pipeline_barrier)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
                 src_stage_mask,
                 dst_stage_mask,
                 Default::default(),

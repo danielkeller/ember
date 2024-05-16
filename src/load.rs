@@ -701,6 +701,6 @@ impl Device<'_> {
     /// function was not found.
     #[doc = crate::man_link!(vkGetDeviceProcAddr)]
     pub fn get_proc_addr(&self, name: &str) -> NonNull<c_void> {
-        self.instance().load(self.borrow(), name)
+        self.instance().load(self.handle(), name)
     }
 }

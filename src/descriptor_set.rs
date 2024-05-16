@@ -77,7 +77,7 @@ impl<'d> DescriptorSetLayout<'d> {
         let mut handle = None;
         unsafe {
             (device.fun.create_descriptor_set_layout)(
-                device.borrow(),
+                device.handle(),
                 &VkDescriptorSetLayoutCreateInfo {
                     bindings: vk_bindings.as_slice().into(),
                     ..Default::default()
@@ -95,8 +95,8 @@ impl Drop for DescriptorSetLayout<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_descriptor_set_layout)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }
@@ -157,7 +157,7 @@ impl<'d> DescriptorPool<'d> {
         let mut handle = None;
         unsafe {
             (device.fun.create_descriptor_pool)(
-                device.borrow(),
+                device.handle(),
                 &DescriptorPoolCreateInfo {
                     max_sets,
                     pool_sizes: pool_sizes.into(),
@@ -179,8 +179,8 @@ impl Drop for DescriptorPool<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_descriptor_pool)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }
@@ -191,8 +191,8 @@ impl DescriptorPool<'_> {
     pub fn reset(&mut self) -> Result<()> {
         unsafe {
             (self.device.fun.reset_descriptor_pool)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 Default::default(),
             )?;
         }
@@ -234,7 +234,7 @@ impl<'a> DescriptorSet<'a> {
         let mut handle = MaybeUninit::uninit();
         let handle = unsafe {
             (pool.device.fun.allocate_descriptor_sets)(
-                pool.device.borrow(),
+                pool.device.handle(),
                 &DescriptorSetAllocateInfo {
                     stype: Default::default(),
                     next: Default::default(),
@@ -255,12 +255,12 @@ impl<'a> DescriptorSet<'a> {
     }
 
     /// Borrows the inner Vulkan handle.
-    pub fn borrow(&self) -> Ref<VkDescriptorSet> {
+    pub fn handle(&self) -> Ref<VkDescriptorSet> {
         self.handle.borrow()
     }
     /// Mutably borrows the inner Vulkan handle.
-    pub fn borrow_mut(&mut self) -> Mut<VkDescriptorSet> {
-        self.handle.borrow_mut()
+    pub fn handle_mut(&mut self) -> Mut<VkDescriptorSet> {
+        self.handle.handle_mut()
     }
     /// Returns the set's layout.
     pub fn layout(&self) -> &DescriptorSetLayout {

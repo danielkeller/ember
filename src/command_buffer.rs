@@ -45,13 +45,13 @@ pub struct CommandBuffer<'a>(Mut<'a, VkCommandBuffer>);
 #[derive(Debug)]
 pub struct SecondaryCommandBuffer<'a> {
     buf: Mut<'a, VkCommandBuffer>,
-    // pass: Option<Arc<RenderPass>>,
+    pass: Option<&'a RenderPass<'a>>,
     subpass: u32,
 }
 
 #[derive(Debug)]
 struct Bindings<'a> {
-    layout: bumpalo::collections::Vec<'a, Arc<DescriptorSetLayout<'a>>>,
+    layout: bumpalo::collections::Vec<'a, &'a DescriptorSetLayout<'a>>,
     inited: bumpalo::collections::Vec<'a, bool>,
     pipeline: Option<&'a Pipeline<'a>>,
 }
@@ -106,7 +106,7 @@ impl<'d> CommandPool<'d> {
         let mut handle = None;
         unsafe {
             (device.fun.create_command_pool)(
-                device.borrow(),
+                device.handle(),
                 &CommandPoolCreateInfo {
                     queue_family_index,
                     ..Default::default()
@@ -131,8 +131,8 @@ impl Drop for CommandPool<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_command_pool)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }
@@ -141,8 +141,8 @@ impl Drop for CommandPool<'_> {
 
 impl CommandPool<'_> {
     /// Borrows the inner Vulkan handle.
-    pub fn borrow_mut(&mut self) -> Mut<VkCommandPool> {
-        self.handle.borrow_mut()
+    pub fn handle_mut(&mut self) -> Mut<VkCommandPool> {
+        self.handle.handle_mut()
     }
 
     fn len(&self) -> usize {
@@ -155,7 +155,7 @@ impl CommandPool<'_> {
         let new_len = old_len + additional as usize;
         unsafe {
             (self.device.fun.allocate_command_buffers)(
-                self.device.borrow(),
+                self.device.handle(),
                 &CommandBufferAllocateInfo {
                     stype: Default::default(),
                     next: Default::default(),
@@ -176,8 +176,8 @@ impl CommandPool<'_> {
     pub fn reset(&mut self, flags: CommandPoolResetFlags) -> Result<()> {
         unsafe {
             (self.device.fun.reset_command_pool)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 flags,
             )?;
         }
@@ -198,7 +198,7 @@ impl CommandPool<'_> {
         // Safety: Moving the Handle<> doesn't actually invalidate the reference.
         let mut buffer: Mut<'a, VkCommandBuffer> = unsafe {
             self.buffers.borrow_mut()[buffer]
-                .borrow_mut()
+                .handle_mut()
                 .reborrow_mut_unchecked()
         };
         unsafe {
@@ -289,7 +289,7 @@ impl CommandPool<'_> {
 }
 
 impl CommandBuffer<'_> {
-    pub fn borrow_mut(&mut self) -> Mut<VkCommandBuffer> {
+    pub fn handle_mut(&mut self) -> Mut<VkCommandBuffer> {
         self.0.reborrow_mut()
     }
 }
@@ -314,7 +314,7 @@ impl<'a> CommandRecording<'a> {
     pub fn end(mut self) -> Result<CommandBuffer<'a>> {
         unsafe {
             (self.pool.device.fun.end_command_buffer)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
             )?;
         }
         Ok(self.buffer)
@@ -349,7 +349,7 @@ impl<'a> CommandRecording<'a> {
         };
         unsafe {
             (self.pool.device.fun.cmd_begin_render_pass)(
-                self.buffer.borrow_mut(),
+                self.buffer.handle_mut(),
                 &info,
                 SubpassContents::INLINE,
             );
@@ -422,7 +422,7 @@ impl<'a> RenderPassRecording<'a> {
         self.subpass += 1;
         unsafe {
             (self.rec.pool.device.fun.cmd_next_subpass)(
-                self.rec.buffer.borrow_mut(),
+                self.rec.buffer.handle_mut(),
                 SubpassContents::INLINE,
             )
         }
@@ -459,7 +459,7 @@ impl<'a> RenderPassRecording<'a> {
         }
         unsafe {
             (self.rec.pool.device.fun.cmd_end_render_pass)(
-                self.rec.buffer.borrow_mut(),
+                self.rec.buffer.handle_mut(),
             );
         }
         Ok(self.rec)

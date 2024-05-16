@@ -50,7 +50,7 @@ impl Device<'_> {
         let mut handle = None;
         unsafe {
             (self.fun.get_device_queue)(
-                self.borrow(),
+                self.handle(),
                 family_index,
                 queue_index,
                 &mut handle,
@@ -72,7 +72,7 @@ impl Queue<'_> {
     }
     /// Mutably borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkQueue> {
-        self.handle.borrow_mut()
+        self.handle.handle_mut()
     }
     /// Add an item to the queue's cleanup. The value will be dropped when a
     /// fence is submitted and waited on.
@@ -147,7 +147,7 @@ impl Queue<'_> {
             for c in info.commands.iter_mut() {
                 info_recordings
                     .push(c.lock_resources().ok_or(Error::InvalidArgument)?);
-                commands.push(c.borrow_mut()?);
+                commands.push(c.handle_mut()?);
             }
             recordings.push(info_recordings);
             let wait_semaphores = scratch.alloc_slice_fill_iter(
@@ -170,7 +170,7 @@ impl Queue<'_> {
 
         unsafe {
             (self.device.fun.queue_submit)(
-                self.handle.borrow_mut(),
+                self.handle.handle_mut(),
                 vk_infos.len() as u32,
                 Array::from_slice(&vk_infos),
                 fence,
@@ -200,7 +200,7 @@ impl Queue<'_> {
 
     #[doc = crate::man_link!(vkQueueWaitIdle)]
     pub fn wait_idle(&mut self) -> Result<()> {
-        unsafe { (self.device.fun.queue_wait_idle)(self.handle.borrow_mut())? };
+        unsafe { (self.device.fun.queue_wait_idle)(self.handle.handle_mut())? };
         self.resources.new_cleanup().cleanup();
         Ok(())
     }

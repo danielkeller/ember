@@ -36,7 +36,7 @@ impl<'d> RenderPass<'d> {
         let mut handle = None;
         unsafe {
             (device.fun.create_render_pass)(
-                device.borrow(),
+                device.handle(),
                 info,
                 None,
                 &mut handle,
@@ -68,8 +68,8 @@ impl Drop for RenderPass<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_render_pass)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }

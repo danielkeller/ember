@@ -86,20 +86,22 @@ struct Object;
 
 impl<'a> CmdBuf<'a> {
     fn record_thing(&mut self, _: &'a Object) {}
+    fn record_secondary(&mut self, _: &'a mut CmdBuf<'a>) {}
 }
 
 fn foo() {
     let mut p = Pool;
+    let mut p1 = Pool;
 
     let mut b = p.allocate();
     let mut b1 = p.allocate();
+    let mut b2 = p1.allocate();
+    let mut b3 = p1.allocate();
 
-    let o = Object;
-    b.record_thing(&o);
-    b.record_thing(&Object);
-    drop(b);
-    b1.record_thing(&o);
+    b.record_secondary(&mut b2);
+    b3.record_secondary(&mut b1);
     p.reset();
+    p1.reset();
 }
 
 #[doc = crate::man_link!(vkEnumerateInstanceExtensionProperties)]
@@ -145,9 +147,6 @@ pub(crate) fn test_device() -> Result<(Arc<device::Device>, queue::Queue)> {
 /// This module is intended to be imported qualified; ie `use maia::vk;`
 pub mod vk {
     pub use crate::buffer::{Buffer, BufferWithoutMemory};
-    pub use crate::command_buffer::barrier::{
-        BufferMemoryBarrier, ImageMemoryBarrier,
-    };
     pub use crate::command_buffer::{
         CommandBuffer, CommandPool, CommandRecording,
         ExternalRenderPassRecording, RenderPassRecording,

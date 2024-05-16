@@ -27,7 +27,7 @@ impl<'d> Sampler<'d> {
         let mut handle = None;
         let result = unsafe {
             (device.fun.create_sampler)(
-                device.borrow(),
+                device.handle(),
                 info,
                 None,
                 &mut handle,
@@ -45,8 +45,8 @@ impl Drop for Sampler<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_sampler)(
-                self.device.borrow(),
-                self.handle.borrow_mut(),
+                self.device.handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }

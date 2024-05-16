@@ -81,7 +81,7 @@ impl<'d> ImageWithoutMemory<'d> {
         let mut handle = None;
         unsafe {
             (device.fun.create_image)(
-                device.borrow(),
+                device.handle(),
                 info,
                 None,
                 &mut handle,
@@ -120,7 +120,7 @@ impl<'d> Image<'d> {
     ) -> ResultAndSelf<Self, ImageWithoutMemory<'d>> {
         if let Err(err) = unsafe {
             (memory.device().fun.bind_image_memory)(
-                memory.device().borrow(),
+                memory.device().handle(),
                 inner.borrow_mut(),
                 memory.handle(),
                 offset,
@@ -137,8 +137,8 @@ impl Drop for ImageWithoutMemory<'_> {
         if let ImageOwner::Application = &self.res {
             unsafe {
                 (self.device.fun.destroy_image)(
-                    self.device.borrow(),
-                    self.handle.borrow_mut(),
+                    self.device.handle(),
+                    self.handle.handle_mut(),
                     None,
                 )
             }
@@ -149,7 +149,7 @@ impl Drop for ImageWithoutMemory<'_> {
 impl<'d> ImageWithoutMemory<'d> {
     /// Borrows the inner Vulkan handle.
     pub fn borrow_mut(&mut self) -> Mut<VkImage> {
-        self.handle.borrow_mut()
+        self.handle.handle_mut()
     }
     /// If [`ImageCreateInfo::usage`] includes a storage image usage type and
     /// the robust buffer access feature was not enabled at device creation, any
@@ -162,7 +162,7 @@ impl<'d> ImageWithoutMemory<'d> {
         let mut result = Default::default();
         unsafe {
             (self.device.fun.get_image_memory_requirements)(
-                self.device.borrow(),
+                self.device.handle(),
                 self.handle.borrow(),
                 &mut result,
             );
@@ -325,7 +325,7 @@ impl<'d> ImageView<'d> {
         let mut handle = None;
         unsafe {
             (image.inner.device.fun.create_image_view)(
-                image.inner.device.borrow(),
+                image.inner.device.handle(),
                 &vk_info,
                 None,
                 &mut handle,
@@ -339,8 +339,8 @@ impl Drop for ImageView<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.image.device().fun.destroy_image_view)(
-                self.image.device().borrow(),
-                self.handle.borrow_mut(),
+                self.image.device().handle(),
+                self.handle.handle_mut(),
                 None,
             )
         }
