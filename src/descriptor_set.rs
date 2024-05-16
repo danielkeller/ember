@@ -96,7 +96,7 @@ impl Drop for DescriptorSetLayout<'_> {
         unsafe {
             (self.device.fun.destroy_descriptor_set_layout)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }
@@ -180,7 +180,7 @@ impl Drop for DescriptorPool<'_> {
         unsafe {
             (self.device.fun.destroy_descriptor_pool)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }
@@ -192,7 +192,7 @@ impl DescriptorPool<'_> {
         unsafe {
             (self.device.fun.reset_descriptor_pool)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 Default::default(),
             )?;
         }
@@ -260,7 +260,7 @@ impl<'a> DescriptorSet<'a> {
     }
     /// Mutably borrows the inner Vulkan handle.
     pub fn handle_mut(&mut self) -> Mut<VkDescriptorSet> {
-        self.handle.handle_mut()
+        self.handle.borrow_mut()
     }
     /// Returns the set's layout.
     pub fn layout(&self) -> &DescriptorSetLayout {

@@ -69,7 +69,7 @@ impl Drop for RenderPass<'_> {
         unsafe {
             (self.device.fun.destroy_render_pass)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }

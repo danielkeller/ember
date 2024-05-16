@@ -75,7 +75,7 @@ impl Drop for SemaphoreRAII<'_> {
         unsafe {
             (self.device.fun.destroy_semaphore)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }

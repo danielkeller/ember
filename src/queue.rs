@@ -6,16 +6,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use bumpalo::collections::Vec as BumpVec;
+use std::cell::RefCell;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 
 use crate::cleanup_queue::CleanupQueue;
 use crate::command_buffer::CommandBuffer;
 use crate::device::Device;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::exclusive::Exclusive;
-use crate::fence::{Fence, PendingFence};
-use crate::ffi::Array;
-use crate::semaphore::{Semaphore, SemaphoreSignaller};
+use crate::ffi::{Array, Null};
+use crate::semaphore::Semaphore;
 use crate::types::*;
 use crate::vk::PipelineStageFlags;
 
@@ -72,135 +74,157 @@ impl Queue<'_> {
     }
     /// Mutably borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkQueue> {
-        self.handle.handle_mut()
-    }
-    /// Add an item to the queue's cleanup. The value will be dropped when a
-    /// fence is submitted and waited on.
-    pub(crate) fn add_resource(&mut self, value: Arc<dyn Send + Sync>) {
-        self.resources.push(value)
+        self.handle.borrow_mut()
     }
 }
 
-impl Drop for Queue<'_> {
-    /// Waits for the queue to be idle before dropping resources
+// It's possible that scope() is sound with a mutable reference to the
+// SubmitScope, so RefCell would be unneccessary.
+struct ScopeCleanup<'env>(RefCell<&'env mut Queue<'env>>);
+
+impl Drop for ScopeCleanup<'_> {
     fn drop(&mut self) {
-        if let Err(err) = self.wait_idle() {
-            self.resources.leak();
-            panic!("vkQueueWaitIdle failed: {}", err);
+        let queue = self.0.get_mut();
+        if unsafe { (queue.device.fun.queue_wait_idle)(queue.mut_handle()) }
+            .is_err()
+        {
+            // Potentially in some cases (eg device loss) this is actually
+            // recoverable since the other destructors will fail in the same
+            // way.
+            eprintln!("vkQueueWaitIdle failed");
+            std::process::abort();
         }
+    }
+}
+
+pub struct SubmitScope<'scope, 'env: 'scope> {
+    queue: ScopeCleanup<'env>,
+    scope: PhantomData<&'scope mut &'scope ()>,
+    env: PhantomData<&'env mut &'env ()>,
+}
+
+impl<'env> Queue<'env> {
+    pub fn scope<F>(&'env mut self, f: F)
+    where
+        F: for<'scope> FnOnce(&'scope SubmitScope<'scope, 'env>),
+    {
+        f(&SubmitScope {
+            queue: ScopeCleanup(RefCell::new(self)),
+            scope: PhantomData,
+            env: PhantomData,
+        });
+    }
+
+    /// Scoped submit that allows new commands to be submitted before the
+    /// previous ones complete. This can improve device utilization because
+    /// draining and refilling work queues on the device takes some time.
+    pub fn double_buffered_scope<F, T>(
+        &'env mut self, (_a, _b): (&'env mut T, &'env mut T), _f: F,
+    ) where
+        F: for<'scope> FnMut(
+            &'scope SubmitScope<'scope, 'env>,
+            &'scope mut T,
+        ) -> bool,
+    {
+    }
+}
+
+struct SubmitBuilder<'bump> {
+    scratch: &'bump bumpalo::Bump,
+    submits: BumpVec<'bump, VkSubmitInfo<'bump, Null>>,
+    wait: BumpVec<'bump, Ref<'bump, VkSemaphore>>,
+    masks: BumpVec<'bump, PipelineStageFlags>,
+    commands: BumpVec<'bump, Mut<'bump, VkCommandBuffer>>,
+    signal: BumpVec<'bump, Ref<'bump, VkSemaphore>>,
+}
+
+impl<'bump> SubmitBuilder<'bump> {
+    fn advance(&mut self) {
+        fn take<'b, T>(
+            vec: &mut bumpalo::collections::Vec<'b, T>, bump: &'b bumpalo::Bump,
+        ) -> &'b [T] {
+            std::mem::replace(vec, bumpalo::vec![in bump]).into_bump_slice()
+        }
+
+        self.submits.push(VkSubmitInfo {
+            wait_semaphores: take(&mut self.wait, self.scratch).into(),
+            wait_stage_masks: Array::from_slice(take(
+                &mut self.masks,
+                self.scratch,
+            )),
+            command_buffers: take(&mut self.commands, self.scratch).into(),
+            signal_semaphores: take(&mut self.signal, self.scratch).into(),
+            ..Default::default()
+        });
+    }
+    fn add_wait(
+        &mut self, wait: Ref<'bump, VkSemaphore>, mask: PipelineStageFlags,
+    ) {
+        if !self.commands.is_empty() || !self.signal.is_empty() {
+            self.advance()
+        }
+        self.wait.push(wait);
+        self.masks.push(mask);
+    }
+    fn add_command(&mut self, command: Mut<'bump, VkCommandBuffer>) {
+        if !self.signal.is_empty() {
+            self.advance()
+        }
+        self.commands.push(command);
+    }
+    fn add_signal(&mut self, signal: Ref<'bump, VkSemaphore>) {
+        self.signal.push(signal);
     }
 }
 
 #[doc = crate::man_link!(VkSubmitInfo)]
-#[derive(Default)]
-pub struct SubmitInfo<'a> {
-    pub wait: &'a mut [(&'a mut Semaphore<'a>, PipelineStageFlags)],
-    pub commands: &'a mut [&'a mut CommandBuffer<'a>],
-    pub signal: &'a mut [&'a mut Semaphore<'a>],
+pub enum Submit<'a> {
+    Wait(&'a Semaphore<'a>, PipelineStageFlags),
+    Command(&'a mut CommandBuffer<'a>),
+    Signal(&'a Semaphore<'a>),
+}
+
+impl<'scope, 'env> SubmitScope<'scope, 'env> {
+    pub fn submit(&'scope self, infos: &mut [Submit<'scope>]) {
+        let queue = &mut *self.queue.0.borrow_mut();
+        let scratch = queue.scratch.get_mut();
+        let mut builder = SubmitBuilder {
+            scratch,
+            submits: bumpalo::vec![in scratch],
+            wait: bumpalo::vec![in scratch],
+            masks: bumpalo::vec![in scratch],
+            commands: bumpalo::vec![in scratch],
+            signal: bumpalo::vec![in scratch],
+        };
+        for info in infos {
+            match info {
+                Submit::Wait(semaphore, wait_stage_mask) => {
+                    builder.add_wait(semaphore.handle(), *wait_stage_mask)
+                }
+                Submit::Command(cmd) => builder.add_command(cmd.handle_mut()),
+                Submit::Signal(semaphore) => {
+                    builder.add_signal(semaphore.handle())
+                }
+            }
+        }
+        builder.advance();
+
+        unsafe {
+            (queue.device.fun.queue_submit)(
+                queue.handle.borrow_mut(),
+                builder.submits.len() as u32,
+                Array::from_slice(&builder.submits),
+                None,
+            )
+        }
+        .unwrap();
+    }
 }
 
 impl Queue<'_> {
-    /// Returns [`Error::InvalidArgument`] if any semaphore in `signal` already
-    /// has a signal operation pending, or if any semaphore in `wait` does not,
-    /// or if any command buffer is not in the executable state.
-    #[doc = crate::man_link!(vkQueueSubmit)]
-    pub fn submit_with_fence(
-        &mut self, infos: &mut [SubmitInfo<'_>], mut fence: Fence,
-    ) -> Result<PendingFence> {
-        self.submit_impl(infos, Some(fence.mut_handle()))?;
-        Ok(fence.into_pending(self.resources.new_cleanup()))
-    }
-
-    /// Returns [`Error::InvalidArgument`] if any semaphore in `signal` already
-    /// has a signal operation pending, or if any semaphore in `wait` does not,
-    /// or if any command buffer is not in the executable state.
-    #[doc = crate::man_link!(vkQueueSubmit)]
-    pub fn submit(&mut self, infos: &mut [SubmitInfo<'_>]) -> Result<()> {
-        self.submit_impl(infos, None)
-    }
-
-    fn submit_impl(
-        &mut self, infos: &mut [SubmitInfo<'_>], fence: Option<Mut<VkFence>>,
-    ) -> Result<()> {
-        for info in infos.iter() {
-            for (sem, _) in info.wait.iter() {
-                if sem.signaller.is_none() {
-                    return Err(Error::InvalidArgument);
-                }
-            }
-            for sem in info.signal.iter() {
-                if sem.signaller.is_some() {
-                    return Err(Error::InvalidArgument);
-                }
-            }
-        }
-
-        let scratch = self.scratch.get_mut();
-        scratch.reset();
-
-        // This needs to stay in a Vec because its destructor is important
-        let mut recordings = bumpalo::vec![in scratch];
-        let mut vk_infos = bumpalo::vec![in scratch];
-        for info in infos.iter_mut() {
-            let mut commands = bumpalo::vec![in scratch];
-            let mut info_recordings = bumpalo::vec![in scratch];
-            for c in info.commands.iter_mut() {
-                info_recordings
-                    .push(c.lock_resources().ok_or(Error::InvalidArgument)?);
-                commands.push(c.handle_mut()?);
-            }
-            recordings.push(info_recordings);
-            let wait_semaphores = scratch.alloc_slice_fill_iter(
-                info.wait.iter().map(|(sem, _)| sem.handle()),
-            );
-            let wait_stage_masks = scratch.alloc_slice_fill_iter(
-                info.wait.iter().map(|(_, mask)| *mask), //
-            );
-            let signal_semaphores = scratch.alloc_slice_fill_iter(
-                info.signal.iter().map(|sem| sem.handle()),
-            );
-            vk_infos.push(VkSubmitInfo {
-                wait_semaphores: wait_semaphores.into(),
-                wait_stage_masks: Array::from_slice(wait_stage_masks),
-                command_buffers: commands.into_bump_slice().into(),
-                signal_semaphores: signal_semaphores.into(),
-                ..Default::default()
-            });
-        }
-
-        unsafe {
-            (self.device.fun.queue_submit)(
-                self.handle.handle_mut(),
-                vk_infos.len() as u32,
-                Array::from_slice(&vk_infos),
-                fence,
-            )?;
-        }
-        drop(vk_infos);
-
-        // Everything fallible is done, mark resources as in use
-        for (info, recs) in infos.iter_mut().zip(recordings.into_iter()) {
-            for (sem, _) in info.wait.iter_mut() {
-                self.resources.push(sem.take_signaller());
-                self.resources.push(sem.inner.clone());
-            }
-            self.resources.extend(recs.into_iter());
-            for command in info.commands.iter() {
-                self.resources.push(command.lock_self());
-            }
-            for sem in info.signal.iter_mut() {
-                sem.signaller = Some(SemaphoreSignaller::Queue(
-                    self.resources.new_cleanup(),
-                ));
-                self.resources.push(sem.inner.clone());
-            }
-        }
-        Ok(())
-    }
-
     #[doc = crate::man_link!(vkQueueWaitIdle)]
     pub fn wait_idle(&mut self) -> Result<()> {
-        unsafe { (self.device.fun.queue_wait_idle)(self.handle.handle_mut())? };
+        unsafe { (self.device.fun.queue_wait_idle)(self.handle.borrow_mut())? };
         self.resources.new_cleanup().cleanup();
         Ok(())
     }
@@ -215,11 +239,10 @@ mod test {
         let (dev, mut q) = crate::test_device()?;
         let mut pool = vk::CommandPool::new(&dev, 0)?;
         assert!(pool.reset(Default::default()).is_ok());
-        let buf = pool.allocate()?;
-        let mut buf = pool.begin(buf)?.end()?;
+        let mut buf = pool.begin().end()?;
 
         let fence = q.submit_with_fence(
-            &mut [vk::SubmitInfo {
+            &mut [vk::SubmitInfo1 {
                 commands: &mut [&mut buf],
                 ..Default::default()
             }],
@@ -227,7 +250,7 @@ mod test {
         )?;
         assert!(q
             .submit_with_fence(
-                &mut [vk::SubmitInfo {
+                &mut [vk::SubmitInfo1 {
                     commands: &mut [&mut buf],
                     ..Default::default()
                 }],
@@ -241,7 +264,7 @@ mod test {
 
         assert!(q
             .submit_with_fence(
-                &mut [vk::SubmitInfo {
+                &mut [vk::SubmitInfo1 {
                     commands: &mut [&mut buf],
                     ..Default::default()
                 }],
@@ -258,7 +281,7 @@ mod test {
         let mut sem = vk::Semaphore::new(&dev)?;
         assert!(q
             .submit_with_fence(
-                &mut [vk::SubmitInfo {
+                &mut [vk::SubmitInfo1 {
                     signal: &mut [&mut sem],
                     ..Default::default()
                 }],
@@ -267,7 +290,7 @@ mod test {
             .is_ok());
         assert!(q
             .submit_with_fence(
-                &mut [vk::SubmitInfo {
+                &mut [vk::SubmitInfo1 {
                     signal: &mut [&mut sem],
                     ..Default::default()
                 }],
@@ -276,7 +299,7 @@ mod test {
             .is_err());
         assert!(q
             .submit_with_fence(
-                &mut [vk::SubmitInfo {
+                &mut [vk::SubmitInfo1 {
                     wait: &mut [(&mut sem, Default::default())],
                     ..Default::default()
                 }],
@@ -285,7 +308,7 @@ mod test {
             .is_ok());
         assert!(q
             .submit_with_fence(
-                &mut [vk::SubmitInfo {
+                &mut [vk::SubmitInfo1 {
                     wait: &mut [(&mut sem, Default::default())],
                     ..Default::default()
                 }],
@@ -326,24 +349,25 @@ mod test {
 
         let mut pool1 = vk::CommandPool::new(&dev, 0)?;
         let mut pool2 = vk::CommandPool::new(&dev, 0)?;
-        let buf1 = pool1.allocate()?;
-        let buf2 = pool2.allocate()?;
-        let mut buf1 = pool1.begin(buf1)?.end()?;
-        let mut buf2 = pool2.begin(buf2)?.end()?;
+        let mut buf1 = pool1.begin().end()?;
+        let mut buf2 = pool2.begin().end()?;
 
         let mut sem = vk::Semaphore::new(&dev)?;
 
         q1.submit(&mut [
-            vk::SubmitInfo {
+            vk::SubmitInfo1 {
                 wait: &mut [],
                 commands: &mut [&mut buf1],
                 signal: &mut [&mut sem],
             },
-            vk::SubmitInfo { commands: &mut [&mut buf2], ..Default::default() },
+            vk::SubmitInfo1 {
+                commands: &mut [&mut buf2],
+                ..Default::default()
+            },
         ])?;
 
         let fence = q2.submit_with_fence(
-            &mut [vk::SubmitInfo {
+            &mut [vk::SubmitInfo1 {
                 wait: &mut [(&mut sem, vk::PipelineStageFlags::TOP_OF_PIPE)],
                 ..Default::default()
             }],

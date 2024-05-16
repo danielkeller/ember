@@ -26,6 +26,7 @@ pub struct Device<'i> {
     sampler_allocation_count: AtomicU32,
     queues: Vec<u32>,
     queues_taken: AtomicBool,
+    // Maybe include device_lost so we don't double panic all the time
 }
 
 impl std::fmt::Debug for Device<'_> {
@@ -49,8 +50,8 @@ impl std::hash::Hash for Device<'_> {
 impl Drop for Device<'_> {
     fn drop(&mut self) {
         unsafe {
-            (self.fun.device_wait_idle)(self.handle.handle_mut()).unwrap();
-            (self.fun.destroy_device)(self.handle.handle_mut(), None);
+            (self.fun.device_wait_idle)(self.handle.borrow_mut()).unwrap();
+            (self.fun.destroy_device)(self.handle.borrow_mut(), None);
         }
     }
 }

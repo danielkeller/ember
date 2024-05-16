@@ -173,7 +173,7 @@ impl Drop for PipelineLayout<'_> {
         unsafe {
             (self.device.fun.destroy_pipeline_layout)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }
@@ -401,7 +401,7 @@ impl Drop for Pipeline<'_> {
         unsafe {
             (self.layout.device.fun.destroy_pipeline)(
                 self.layout.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }
@@ -493,7 +493,7 @@ impl Drop for PipelineCache<'_> {
         unsafe {
             (self.device.fun.destroy_pipeline_cache)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }

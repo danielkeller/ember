@@ -46,7 +46,7 @@ impl Drop for Sampler<'_> {
         unsafe {
             (self.device.fun.destroy_sampler)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }

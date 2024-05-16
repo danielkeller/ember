@@ -76,7 +76,7 @@ impl<'d> Buffer<'d> {
         if let Err(err) = unsafe {
             (memory.device().fun.bind_buffer_memory)(
                 memory.device().handle(),
-                inner.handle.handle_mut(),
+                inner.handle.borrow_mut(),
                 memory.handle(),
                 offset,
             )
@@ -92,7 +92,7 @@ impl Drop for BufferWithoutMemory<'_> {
         unsafe {
             (self.device.fun.destroy_buffer)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }
@@ -126,7 +126,7 @@ impl Buffer<'_> {
 impl<'d> BufferWithoutMemory<'d> {
     /// Borrows the inner Vulkan handle.
     pub fn borrow_mut(&mut self) -> Mut<VkBuffer> {
-        self.handle.handle_mut()
+        self.handle.borrow_mut()
     }
     /// If [`BufferCreateInfo::usage`] includes an abritrarily indexable buffer
     /// usage type (uniform, storage, vertex, or index) and the robust buffer

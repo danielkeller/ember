@@ -218,7 +218,7 @@ impl<'u, 's: 'u> DescriptorSetUpdate<'u, 's> {
         // Safety: The set is kept mutably borrowed while the builder
         // is alive, and one call to vkUpdateDescriptorSets counts as
         // a single use as far as external synchronization is concerned
-        unsafe { self.set.handle.handle_mut().reborrow_mut_unchecked() }
+        unsafe { self.set.handle.borrow_mut().reborrow_mut_unchecked() }
     }
 
     /// Add updates to the given set to the builder.

@@ -147,23 +147,27 @@ fn upload_data(
     let mut memory = memory.map(0, src.len())?;
     memory.write_at(0).write_all(src)?;
 
-    let transfer = cmd_pool.allocate()?;
-    let mut rec = cmd_pool.begin(transfer)?;
-    rec.copy_buffer(
+    let mut transfer = cmd_pool.begin();
+    transfer.copy_buffer(
         &staging_buffer,
         dst,
         &[vk::BufferCopy { size: src.len() as u64, ..Default::default() }],
     )?;
-    rec.memory_barrier(
+    transfer.memory_barrier(
         vk::PipelineStageFlags::TRANSFER,
         dst_stage_mask,
         vk::AccessFlags::TRANSFER_WRITE,
         dst_access_mask,
     );
-    let mut transfer = rec.end()?;
+    let mut transfer = transfer.end()?;
     let fence = vk::Fence::new(device)?;
+    queue.scope(|s| {
+        s.submit(&[vk::Submit::Command(&mut transfer)]);
+        s.submit(&[vk::Submit::Command(&mut transfer)]);
+    });
+
     let pending_fence = queue.submit_with_fence(
-        &mut [vk::SubmitInfo {
+        &mut [vk::SubmitInfo1 {
             commands: &mut [&mut transfer],
             ..Default::default()
         }],
@@ -206,9 +210,8 @@ fn upload_image(
     }
     memory.unmap();
 
-    let transfer = cmd_pool.allocate()?;
-    let mut rec = cmd_pool.begin(transfer)?;
-    rec.image_barrier(
+    let mut transfer = cmd_pool.begin();
+    transfer.image_barrier(
         image,
         vk::PipelineStageFlags::TOP_OF_PIPE,
         vk::PipelineStageFlags::TRANSFER,
@@ -217,7 +220,7 @@ fn upload_image(
         vk::ImageLayout::UNDEFINED,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
     );
-    rec.copy_buffer_to_image(
+    transfer.copy_buffer_to_image(
         &staging_buffer,
         image,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -226,7 +229,7 @@ fn upload_image(
             ..Default::default()
         }],
     )?;
-    rec.image_barrier(
+    transfer.image_barrier(
         image,
         vk::PipelineStageFlags::TRANSFER,
         vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -235,10 +238,10 @@ fn upload_image(
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     );
-    let mut transfer = rec.end()?;
+    let mut transfer = transfer.end()?;
     let fence = vk::Fence::new(device)?;
     let pending_fence = queue.submit_with_fence(
-        &mut [vk::SubmitInfo {
+        &mut [vk::SubmitInfo1 {
             commands: &mut [&mut transfer],
             ..Default::default()
         }],
@@ -654,8 +657,7 @@ fn main() -> anyhow::Result<()> {
         subpass.draw_indexed(6, 1, 0, 0, 0)?;
         let mut subpass = subpass.end()?;
 
-        let cmd = cmd_pool.allocate()?;
-        let mut pass = cmd_pool.begin(cmd)?.begin_render_pass_secondary(
+        let mut pass = cmd_pool.begin().begin_render_pass_secondary(
             &render_pass,
             &framebuffer,
             &vk::Rect2D {
@@ -673,7 +675,7 @@ fn main() -> anyhow::Result<()> {
         let mut buf = pass.end()?.end()?;
 
         let pending_fence = queue.submit_with_fence(
-            &mut [vk::SubmitInfo {
+            &mut [vk::SubmitInfo1 {
                 wait: &mut [(
                     &mut acquire_sem,
                     vk::PipelineStageFlags::TOP_OF_PIPE,

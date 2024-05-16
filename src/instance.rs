@@ -25,7 +25,7 @@ impl std::fmt::Debug for Instance {
 
 impl Drop for Instance {
     fn drop(&mut self) {
-        unsafe { (self.fun.destroy_instance)(self.handle.handle_mut(), None) }
+        unsafe { (self.fun.destroy_instance)(self.handle.borrow_mut(), None) }
     }
 }
 

@@ -80,7 +80,7 @@ impl Drop for Framebuffer<'_> {
         unsafe {
             (self.render_pass.device.fun.destroy_framebuffer)(
                 self.render_pass.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }

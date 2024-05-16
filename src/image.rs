@@ -138,7 +138,7 @@ impl Drop for ImageWithoutMemory<'_> {
             unsafe {
                 (self.device.fun.destroy_image)(
                     self.device.handle(),
-                    self.handle.handle_mut(),
+                    self.handle.borrow_mut(),
                     None,
                 )
             }
@@ -149,7 +149,7 @@ impl Drop for ImageWithoutMemory<'_> {
 impl<'d> ImageWithoutMemory<'d> {
     /// Borrows the inner Vulkan handle.
     pub fn borrow_mut(&mut self) -> Mut<VkImage> {
-        self.handle.handle_mut()
+        self.handle.borrow_mut()
     }
     /// If [`ImageCreateInfo::usage`] includes a storage image usage type and
     /// the robust buffer access feature was not enabled at device creation, any
@@ -340,7 +340,7 @@ impl Drop for ImageView<'_> {
         unsafe {
             (self.image.device().fun.destroy_image_view)(
                 self.image.device().handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }

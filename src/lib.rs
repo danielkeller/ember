@@ -45,6 +45,7 @@ pub mod ext;
 #[cfg(doc)]
 pub mod macos_instructions;
 
+use std::default;
 use std::marker::PhantomData;
 
 use crate::error::Result;
@@ -87,6 +88,10 @@ struct Object;
 impl<'a> CmdBuf<'a> {
     fn record_thing(&mut self, _: &'a Object) {}
     fn record_secondary(&mut self, _: &'a mut CmdBuf<'a>) {}
+}
+
+fn device<'a>() -> &'a vk::Device<'a> {
+    todo!()
 }
 
 fn foo() {
@@ -182,7 +187,7 @@ pub mod vk {
         GraphicsPipelineCreateInfo, Pipeline, PipelineCache, PipelineLayout,
     };
     pub use crate::queue::Queue;
-    pub use crate::queue::SubmitInfo;
+    pub use crate::queue::Submit;
     pub use crate::render_pass::RenderPass;
     pub use crate::sampler::Sampler;
     pub use crate::semaphore::Semaphore;

@@ -46,7 +46,7 @@ impl Drop for ShaderModule<'_> {
         unsafe {
             (self.device.fun.destroy_shader_module)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }

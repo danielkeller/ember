@@ -132,7 +132,7 @@ impl Drop for CommandPool<'_> {
         unsafe {
             (self.device.fun.destroy_command_pool)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }
@@ -142,7 +142,7 @@ impl Drop for CommandPool<'_> {
 impl CommandPool<'_> {
     /// Borrows the inner Vulkan handle.
     pub fn handle_mut(&mut self) -> Mut<VkCommandPool> {
-        self.handle.handle_mut()
+        self.handle.borrow_mut()
     }
 
     fn len(&self) -> usize {
@@ -177,7 +177,7 @@ impl CommandPool<'_> {
         unsafe {
             (self.device.fun.reset_command_pool)(
                 self.device.handle(),
-                self.handle.handle_mut(),
+                self.handle.borrow_mut(),
                 flags,
             )?;
         }
@@ -198,7 +198,7 @@ impl CommandPool<'_> {
         // Safety: Moving the Handle<> doesn't actually invalidate the reference.
         let mut buffer: Mut<'a, VkCommandBuffer> = unsafe {
             self.buffers.borrow_mut()[buffer]
-                .handle_mut()
+                .borrow_mut()
                 .reborrow_mut_unchecked()
         };
         unsafe {
