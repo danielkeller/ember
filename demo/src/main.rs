@@ -75,14 +75,16 @@ fn required_instance_extensions() -> anyhow::Result<Vec<vk::Str<'static>>> {
     Ok(result)
 }
 
-fn pick_physical_device(phys: &[vk::PhysicalDevice]) -> vk::PhysicalDevice {
+fn pick_physical_device<'i>(
+    phys: &[vk::PhysicalDevice<'i>],
+) -> vk::PhysicalDevice<'i> {
     let discr = vk::PhysicalDeviceType::DISCRETE_GPU;
     let int = vk::PhysicalDeviceType::INTEGRATED_GPU;
-    phys.iter()
+    *phys
+        .iter()
         .find(|p| p.properties().device_type == discr)
         .or_else(|| phys.iter().find(|p| p.properties().device_type == int))
         .unwrap_or(&phys[0])
-        .clone()
 }
 
 fn pick_queue_family(
@@ -124,9 +126,9 @@ fn memory_type(
 }
 
 fn upload_data(
-    device: &Arc<vk::Device>, queue: &mut vk::Queue,
-    cmd_pool: &mut vk::CommandPool, src: &[u8], dst: &Arc<vk::Buffer>,
-    dst_stage_mask: vk::PipelineStageFlags, dst_access_mask: vk::AccessFlags,
+    device: &vk::Device, queue: &mut vk::Queue, cmd_pool: &mut vk::CommandPool,
+    src: &[u8], dst: &vk::Buffer, dst_stage_mask: vk::PipelineStageFlags,
+    dst_access_mask: vk::AccessFlags,
 ) -> anyhow::Result<()> {
     let staging_buffer = vk::BufferWithoutMemory::new(
         &device,
@@ -147,7 +149,8 @@ fn upload_data(
     let mut memory = memory.map(0, src.len())?;
     memory.write_at(0).write_all(src)?;
 
-    let mut transfer = cmd_pool.begin();
+    let mut recording_session = cmd_pool.reset()?;
+    let mut transfer = recording_session.begin();
     transfer.copy_buffer(
         &staging_buffer,
         dst,
@@ -162,18 +165,9 @@ fn upload_data(
     let mut transfer = transfer.end()?;
     let fence = vk::Fence::new(device)?;
     queue.scope(|s| {
-        s.submit(&[vk::Submit::Command(&mut transfer)]);
-        s.submit(&[vk::Submit::Command(&mut transfer)]);
+        s.submit(&mut [vk::Submit::Command(&mut transfer)]);
+        s.submit(&mut [vk::Submit::Command(&mut transfer)]);
     });
-
-    let pending_fence = queue.submit_with_fence(
-        &mut [vk::SubmitInfo1 {
-            commands: &mut [&mut transfer],
-            ..Default::default()
-        }],
-        fence,
-    )?;
-    pending_fence.wait()?;
     Ok(())
 }
 

@@ -20,9 +20,7 @@ pub struct Sampler<'d> {
 
 impl<'d> Sampler<'d> {
     #[doc = crate::man_link!(vkCreateSampler)]
-    pub fn new(
-        device: &'d Device, info: &SamplerCreateInfo,
-    ) -> Result<Arc<Self>> {
+    pub fn new(device: &'d Device, info: &SamplerCreateInfo) -> Result<Self> {
         device.increment_sampler_alloc_count()?;
         let mut handle = None;
         let result = unsafe {
@@ -37,7 +35,7 @@ impl<'d> Sampler<'d> {
             device.decrement_sampler_alloc_count();
             result?
         }
-        Ok(Arc::new(Self { handle: handle.unwrap(), device }))
+        Ok(Self { handle: handle.unwrap(), device })
     }
 }
 

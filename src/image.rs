@@ -8,7 +8,6 @@
 
 use crate::enums::*;
 use crate::error::{Error, ErrorAndSelf, Result, ResultAndSelf};
-use crate::ext::khr_swapchain::SwapchainImages;
 use crate::memory::{DeviceMemory, MemoryLifetime};
 use crate::subobject::Subobject;
 use crate::types::*;
@@ -26,7 +25,7 @@ pub struct ImageWithoutMemory<'d> {
     mip_levels: u32,
     array_layers: u32,
     usage: ImageUsageFlags,
-    res: ImageOwner<'d>,
+    res: ImageOwner,
     device: &'d Device<'d>,
 }
 
@@ -40,8 +39,8 @@ pub struct Image<'d> {
 }
 
 #[derive(Debug)]
-enum ImageOwner<'d> {
-    Swapchain(Subobject<SwapchainImages<'d>>),
+enum ImageOwner {
+    // Swapchain(Subobject<SwapchainImages<'d>>),
     Application,
 }
 
@@ -198,25 +197,25 @@ impl<'d> ImageWithoutMemory<'d> {
 }
 
 impl<'d> Image<'d> {
-    pub(crate) fn new_from(
-        handle: Handle<VkImage>, device: &'d Device,
-        res: Subobject<SwapchainImages<'d>>, format: Format, extent: Extent3D,
-        array_layers: u32, usage: ImageUsageFlags,
-    ) -> Self {
-        Self {
-            inner: ImageWithoutMemory {
-                handle,
-                device,
-                res: ImageOwner::Swapchain(res),
-                format,
-                extent,
-                array_layers,
-                usage,
-                mip_levels: 1,
-            },
-            _memory: None,
-        }
-    }
+    // pub(crate) fn new_from(
+    //     handle: Handle<VkImage>, device: &'d Device,
+    //     res: Subobject<SwapchainImages<'d>>, format: Format, extent: Extent3D,
+    //     array_layers: u32, usage: ImageUsageFlags,
+    // ) -> Self {
+    //     Self {
+    //         inner: ImageWithoutMemory {
+    //             handle,
+    //             device,
+    //             res: ImageOwner::Swapchain(res),
+    //             format,
+    //             extent,
+    //             array_layers,
+    //             usage,
+    //             mip_levels: 1,
+    //         },
+    //         _memory: None,
+    //     }
+    // }
 
     /// Borrows the inner Vulkan handle.
     pub fn borrow(&self) -> Ref<VkImage> {
@@ -278,9 +277,9 @@ impl<'d> Image<'d> {
 /// An
 #[doc = crate::spec_link!("image view", "12", "resources-image-views")]
 #[derive(Debug)]
-pub struct ImageView<'d> {
+pub struct ImageView<'a> {
     handle: Handle<VkImageView>,
-    image: Arc<Image<'d>>,
+    image: &'a Image<'a>,
 }
 
 impl PartialEq for ImageView<'_> {
@@ -307,11 +306,11 @@ pub struct ImageViewCreateInfo {
     pub subresource_range: ImageSubresourceRange,
 }
 
-impl<'d> ImageView<'d> {
+impl<'a> ImageView<'a> {
     /// Create an image view of the image.
     pub fn new(
-        image: &Arc<Image<'d>>, info: &ImageViewCreateInfo,
-    ) -> Result<Arc<Self>> {
+        image: &'a Image<'a>, info: &ImageViewCreateInfo,
+    ) -> Result<Self> {
         let vk_info = VkImageViewCreateInfo {
             stype: Default::default(),
             next: Default::default(),
@@ -331,7 +330,7 @@ impl<'d> ImageView<'d> {
                 &mut handle,
             )?;
         }
-        Ok(Arc::new(Self { handle: handle.unwrap(), image: image.clone() }))
+        Ok(Self { handle: handle.unwrap(), image })
     }
 }
 
@@ -357,7 +356,7 @@ impl<'d> ImageView<'d> {
         self.image.device()
     }
     /// Returns the underlying image
-    pub fn image(&self) -> &Arc<Image<'d>> {
+    pub fn image(&'d self) -> &Image {
         &self.image
     }
 }

@@ -392,7 +392,7 @@ impl<'u, 's: 'u> DescriptorSetUpdate<'u, 's> {
 
     pub(crate) fn images_impl(
         mut self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'s ImageView, ImageLayout)],
+        images: &[(&'s ImageView<'s>, ImageLayout)],
         descriptor_type: DescriptorType,
     ) -> Result<Self> {
         let iter = BindingIter::new(
@@ -439,7 +439,7 @@ impl<'u, 's: 'u> DescriptorSetUpdate<'u, 's> {
     #[doc = image_checks!()]
     pub fn sampled_images(
         self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'s ImageView, ImageLayout)],
+        images: &[(&'s ImageView<'s>, ImageLayout)],
     ) -> Result<Self> {
         self.images_impl(
             dst_binding,
@@ -452,7 +452,7 @@ impl<'u, 's: 'u> DescriptorSetUpdate<'u, 's> {
     #[doc = image_checks!()]
     pub fn storage_images(
         self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'s ImageView, ImageLayout)],
+        images: &[(&'s ImageView<'s>, ImageLayout)],
     ) -> Result<Self> {
         self.images_impl(
             dst_binding,
@@ -465,7 +465,7 @@ impl<'u, 's: 'u> DescriptorSetUpdate<'u, 's> {
     #[doc = image_checks!()]
     pub fn input_attachments(
         self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'s ImageView, ImageLayout)],
+        images: &[(&'s ImageView<'s>, ImageLayout)],
     ) -> Result<Self> {
         self.images_impl(
             dst_binding,

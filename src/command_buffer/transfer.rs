@@ -15,13 +15,14 @@ use crate::types::*;
 
 use super::CommandRecording;
 
-impl<'a> CommandRecording<'a> {
+impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     /// The reference count of `dst` is incremented. Offset and size are rounded
     /// down to the nearest multiple of 4. Returns [`Error::OutOfBounds`] if they
     /// are out of bounds.
     #[doc = crate::man_link!(vkCmdFillBuffer)]
     pub fn fill_buffer(
-        &mut self, dst: &'a Buffer, offset: u64, size: Option<u64>, data: u32,
+        &mut self, dst: &'pool Buffer, offset: u64, size: Option<u64>,
+        data: u32,
     ) -> Result<()> {
         let offset = offset & !3;
         let size = match size {
@@ -39,7 +40,7 @@ impl<'a> CommandRecording<'a> {
             }
         };
         unsafe {
-            (self.pool.device.fun.cmd_fill_buffer)(
+            (self.device.fun.cmd_fill_buffer)(
                 self.buffer.handle_mut(),
                 dst.borrow(),
                 offset,
@@ -54,7 +55,8 @@ impl<'a> CommandRecording<'a> {
     /// Returns [`Error::OutOfBounds`] if a region is out of bounds.
     #[doc = crate::man_link!(vkCmdCopyBuffer)]
     pub fn copy_buffer(
-        &mut self, src: &'a Buffer, dst: &'a Buffer, regions: &[BufferCopy],
+        &mut self, src: &'pool Buffer, dst: &'pool Buffer,
+        regions: &[BufferCopy],
     ) -> Result<()> {
         for r in regions {
             if !src.bounds_check(r.src_offset, r.size)
@@ -64,7 +66,7 @@ impl<'a> CommandRecording<'a> {
             }
         }
         unsafe {
-            (self.pool.device.fun.cmd_copy_buffer)(
+            (self.device.fun.cmd_copy_buffer)(
                 self.buffer.handle_mut(),
                 src.borrow(),
                 dst.borrow(),
@@ -80,8 +82,8 @@ impl<'a> CommandRecording<'a> {
     /// [`Error::InvalidArgument`] if `regions` is empty.
     #[doc = crate::man_link!(vkCmdCopyBufferToImage)]
     pub fn copy_buffer_to_image(
-        &mut self, src: &'a Buffer, dst: &'a Image, dst_layout: ImageLayout,
-        regions: &[BufferImageCopy],
+        &mut self, src: &'pool Buffer, dst: &'pool Image,
+        dst_layout: ImageLayout, regions: &[BufferImageCopy],
     ) -> Result<()> {
         for r in regions {
             let bytes = image_byte_size_3d(dst.format(), r.image_extent)
@@ -101,7 +103,7 @@ impl<'a> CommandRecording<'a> {
             }
         }
         unsafe {
-            (self.pool.device.fun.cmd_copy_buffer_to_image)(
+            (self.device.fun.cmd_copy_buffer_to_image)(
                 self.buffer.handle_mut(),
                 src.borrow(),
                 dst.borrow(),
@@ -118,8 +120,9 @@ impl<'a> CommandRecording<'a> {
     /// [`Error::InvalidArgument`] if `regions` is empty.
     #[doc = crate::man_link!(vkCmdBlitImage)]
     pub fn blit_image(
-        &mut self, src: &'a Image, src_layout: ImageLayout, dst: &'a Image,
-        dst_layout: ImageLayout, regions: &[ImageBlit], filter: Filter,
+        &mut self, src: &'pool Image, src_layout: ImageLayout,
+        dst: &'pool Image, dst_layout: ImageLayout, regions: &[ImageBlit],
+        filter: Filter,
     ) -> Result<()> {
         for r in regions {
             if !src.array_bounds_check(
@@ -145,7 +148,7 @@ impl<'a> CommandRecording<'a> {
             }
         }
         unsafe {
-            (self.pool.device.fun.cmd_blit_image)(
+            (self.device.fun.cmd_blit_image)(
                 self.buffer.handle_mut(),
                 src.borrow(),
                 src_layout,
@@ -163,12 +166,12 @@ impl<'a> CommandRecording<'a> {
     /// [`Error::InvalidArgument`] if `ranges` is empty.
     #[doc = crate::man_link!(vkCmdClearColorImage)]
     pub fn clear_color_image(
-        &mut self, image: &'a Image, layout: ImageLayout,
+        &mut self, image: &'pool Image, layout: ImageLayout,
         color: ClearColorValue, ranges: &[ImageSubresourceRange],
     ) -> Result<()> {
         let array = Array::from_slice(ranges).ok_or(Error::InvalidArgument)?;
         unsafe {
-            (self.pool.device.fun.cmd_clear_color_image)(
+            (self.device.fun.cmd_clear_color_image)(
                 self.buffer.handle_mut(),
                 image.borrow(),
                 layout,

@@ -14,14 +14,14 @@ use crate::types::*;
 
 use super::{CommandRecording, RenderPassRecording, SecondaryCommandRecording};
 
-impl<'a> RenderPassRecording<'a> {
+impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdPipelineBarrier)]
     pub fn pipeline_barrier(
         &mut self, src_stage_mask: PipelineStageFlags,
         dst_stage_mask: PipelineStageFlags, dependency_flags: DependencyFlags,
         memory_barriers: &[MemoryBarrier],
-        buffer_memory_barriers: &[BufferMemoryBarrier<'a>],
-        image_memory_barriers: &[ImageMemoryBarrier<'a>],
+        buffer_memory_barriers: &[BufferMemoryBarrier<'pool>],
+        image_memory_barriers: &[ImageMemoryBarrier<'pool>],
     ) {
         self.rec.pipeline_barrier(
             src_stage_mask,
@@ -49,7 +49,7 @@ impl<'a> RenderPassRecording<'a> {
     /// A shortcut for simple image barriers
     #[doc = crate::man_link!(vkCmdPipelineBarrier)]
     pub fn image_barrier(
-        &mut self, image: &'a Image, src_stage_mask: PipelineStageFlags,
+        &mut self, image: &'pool Image, src_stage_mask: PipelineStageFlags,
         dst_stage_mask: PipelineStageFlags, src_access_mask: AccessFlags,
         dst_access_mask: AccessFlags, old_layout: ImageLayout,
         new_layout: ImageLayout,
@@ -66,14 +66,14 @@ impl<'a> RenderPassRecording<'a> {
     }
 }
 
-impl<'a> SecondaryCommandRecording<'a> {
+impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdPipelineBarrier)]
     pub fn pipeline_barrier(
         &mut self, src_stage_mask: PipelineStageFlags,
         dst_stage_mask: PipelineStageFlags, dependency_flags: DependencyFlags,
         memory_barriers: &[MemoryBarrier],
-        buffer_memory_barriers: &[BufferMemoryBarrier<'a>],
-        image_memory_barriers: &[ImageMemoryBarrier<'a>],
+        buffer_memory_barriers: &[BufferMemoryBarrier<'pool>],
+        image_memory_barriers: &[ImageMemoryBarrier<'pool>],
     ) {
         self.rec.pipeline_barrier(
             src_stage_mask,
@@ -101,7 +101,7 @@ impl<'a> SecondaryCommandRecording<'a> {
     /// A shortcut for simple image barriers.
     #[doc = crate::man_link!(vkCmdPipelineBarrier)]
     pub fn image_barrier(
-        &mut self, image: &'a Image, src_stage_mask: PipelineStageFlags,
+        &mut self, image: &'pool Image, src_stage_mask: PipelineStageFlags,
         dst_stage_mask: PipelineStageFlags, src_access_mask: AccessFlags,
         dst_access_mask: AccessFlags, old_layout: ImageLayout,
         new_layout: ImageLayout,
@@ -118,17 +118,17 @@ impl<'a> SecondaryCommandRecording<'a> {
     }
 }
 
-impl<'a> CommandRecording<'a> {
+impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdPipelineBarrier)]
     pub fn pipeline_barrier(
         &mut self, src_stage_mask: PipelineStageFlags,
         dst_stage_mask: PipelineStageFlags, dependency_flags: DependencyFlags,
         memory_barriers: &[MemoryBarrier],
-        buffer_memory_barriers: &[BufferMemoryBarrier<'a>],
-        image_memory_barriers: &[ImageMemoryBarrier<'a>],
+        buffer_memory_barriers: &[BufferMemoryBarrier<'pool>],
+        image_memory_barriers: &[ImageMemoryBarrier<'pool>],
     ) {
         unsafe {
-            (self.pool.device.fun.cmd_pipeline_barrier)(
+            (self.device.fun.cmd_pipeline_barrier)(
                 self.buffer.handle_mut(),
                 src_stage_mask,
                 dst_stage_mask,
@@ -151,7 +151,7 @@ impl<'a> CommandRecording<'a> {
         dst_access_mask: AccessFlags,
     ) {
         unsafe {
-            (self.pool.device.fun.cmd_pipeline_barrier)(
+            (self.device.fun.cmd_pipeline_barrier)(
                 self.buffer.handle_mut(),
                 src_stage_mask,
                 dst_stage_mask,
@@ -173,7 +173,7 @@ impl<'a> CommandRecording<'a> {
     /// A shortcut for simple image barriers.
     #[doc = crate::man_link!(vkCmdPipelineBarrier)]
     pub fn image_barrier(
-        &mut self, image: &'a Image, src_stage_mask: PipelineStageFlags,
+        &mut self, image: &'pool Image, src_stage_mask: PipelineStageFlags,
         dst_stage_mask: PipelineStageFlags, src_access_mask: AccessFlags,
         dst_access_mask: AccessFlags, old_layout: ImageLayout,
         new_layout: ImageLayout,
@@ -191,7 +191,7 @@ impl<'a> CommandRecording<'a> {
                 image: image.borrow(),
                 subresource_range: Default::default(),
             };
-            (self.pool.device.fun.cmd_pipeline_barrier)(
+            (self.device.fun.cmd_pipeline_barrier)(
                 self.buffer.handle_mut(),
                 src_stage_mask,
                 dst_stage_mask,

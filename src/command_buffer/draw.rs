@@ -18,23 +18,23 @@ use super::{
     RenderPassRecording, SecondaryCommandBuffer, SecondaryCommandRecording,
 };
 
-impl<'a> RenderPassRecording<'a> {
+impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdSetViewport)]
     pub fn set_viewport(&mut self, viewport: &Viewport) {
         self.rec.set_viewport(viewport)
     }
 }
-impl<'a> SecondaryCommandRecording<'a> {
+impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdSetViewport)]
     pub fn set_viewport(&mut self, viewport: &Viewport) {
         self.rec.set_viewport(viewport)
     }
 }
-impl<'a> CommandRecording<'a> {
+impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdSetViewport)]
     pub fn set_viewport(&mut self, viewport: &Viewport) {
         unsafe {
-            (self.pool.device.fun.cmd_set_viewport)(
+            (self.device.fun.cmd_set_viewport)(
                 self.buffer.handle_mut(),
                 0,
                 1,
@@ -44,23 +44,23 @@ impl<'a> CommandRecording<'a> {
     }
 }
 
-impl<'a> RenderPassRecording<'a> {
+impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdSetScissor)]
     pub fn set_scissor(&mut self, scissor: &Rect2D) {
         self.rec.set_scissor(scissor)
     }
 }
-impl<'a> SecondaryCommandRecording<'a> {
+impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdSetScissor)]
     pub fn set_scissor(&mut self, scissor: &Rect2D) {
         self.rec.set_scissor(scissor)
     }
 }
-impl<'a> CommandRecording<'a> {
+impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdSetScissor)]
     pub fn set_scissor(&mut self, scissor: &Rect2D) {
         unsafe {
-            (self.pool.device.fun.cmd_set_scissor)(
+            (self.device.fun.cmd_set_scissor)(
                 self.buffer.handle_mut(),
                 0,
                 1,
@@ -70,7 +70,7 @@ impl<'a> CommandRecording<'a> {
     }
 }
 
-impl<'a> Bindings<'a> {
+impl<'rec> Bindings<'rec> {
     fn check(&self) -> Result<()> {
         if let Some(pipeline) = self.pipeline.as_ref() {
             let layouts = &pipeline.layout().layouts();
@@ -95,14 +95,14 @@ impl<'a> Bindings<'a> {
 
 macro_rules! draw_state {
     () => {
-        "Returns [`Error::InvalidState`] if the bound pipeline is not compatible 
-        with the current render pass and subpass, if the bound descriptor sets 
-        and bound graphics pipeline do not have a compatible layout, or if a 
+        "Returns [`Error::InvalidState`] if the bound pipeline is not compatible
+        with the current render pass and subpass, if the bound descriptor sets
+        and bound graphics pipeline do not have a compatible layout, or if a
         descriptor set mentioned in the pipeline's layout is not bound."
     }
 }
 
-impl<'a> RenderPassRecording<'a> {
+impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     #[doc = draw_state!()]
     ///
     #[doc = crate::man_link!(vkCmdDraw)]
@@ -124,7 +124,7 @@ impl<'a> RenderPassRecording<'a> {
     ///
     #[doc = crate::man_link!(vkCmdDrawIndirect)]
     pub fn draw_indirect(
-        &mut self, buffer: &'a Buffer, offset: u64, draw_count: u32,
+        &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
     ) -> Result<()> {
         self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
@@ -152,14 +152,14 @@ impl<'a> RenderPassRecording<'a> {
     ///
     #[doc = crate::man_link!(vkCmdDrawIndexedIndirect)]
     pub fn draw_indexed_indirect(
-        &mut self, buffer: &'a Buffer, offset: u64, draw_count: u32,
+        &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
     ) -> Result<()> {
         self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
         self.rec.draw_indexed_indirect(buffer, offset, draw_count, stride)
     }
 }
-impl<'a> SecondaryCommandRecording<'a> {
+impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     #[doc = draw_state!()]
     ///
     #[doc = crate::man_link!(vkCmdDraw)]
@@ -181,7 +181,7 @@ impl<'a> SecondaryCommandRecording<'a> {
     ///
     #[doc = crate::man_link!(vkCmdDrawIndirect)]
     pub fn draw_indirect(
-        &mut self, buffer: &'a Buffer, offset: u64, draw_count: u32,
+        &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
     ) -> Result<()> {
         self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
@@ -209,7 +209,7 @@ impl<'a> SecondaryCommandRecording<'a> {
     ///
     #[doc = crate::man_link!(vkCmdDrawIndexedIndirect)]
     pub fn draw_indexed_indirect(
-        &mut self, buffer: &'a Buffer, offset: u64, draw_count: u32,
+        &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
     ) -> Result<()> {
         self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
@@ -234,14 +234,14 @@ fn bounds_check_n(
     Ok(())
 }
 
-impl<'a> CommandRecording<'a> {
+impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     fn draw(
         &mut self, vertex_count: u32, instance_count: u32, first_vertex: u32,
         first_instance: u32,
     ) -> Result<()> {
         self.graphics.check()?;
         unsafe {
-            (self.pool.device.fun.cmd_draw)(
+            (self.device.fun.cmd_draw)(
                 self.buffer.handle_mut(),
                 vertex_count,
                 instance_count,
@@ -252,7 +252,7 @@ impl<'a> CommandRecording<'a> {
         Ok(())
     }
     fn draw_indirect(
-        &mut self, buffer: &'a Buffer, offset: u64, draw_count: u32,
+        &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
     ) -> Result<()> {
         if !buffer.usage().contains(BufferUsageFlags::INDIRECT_BUFFER) {
@@ -261,7 +261,7 @@ impl<'a> CommandRecording<'a> {
         bounds_check_n(draw_count, 16, stride, buffer, offset)?;
         self.graphics.check()?;
         unsafe {
-            (self.pool.device.fun.cmd_draw_indirect)(
+            (self.device.fun.cmd_draw_indirect)(
                 self.buffer.handle_mut(),
                 buffer.borrow(),
                 offset,
@@ -277,7 +277,7 @@ impl<'a> CommandRecording<'a> {
     ) -> Result<()> {
         self.graphics.check()?;
         unsafe {
-            (self.pool.device.fun.cmd_draw_indexed)(
+            (self.device.fun.cmd_draw_indexed)(
                 self.buffer.handle_mut(),
                 index_count,
                 instance_count,
@@ -289,7 +289,7 @@ impl<'a> CommandRecording<'a> {
         Ok(())
     }
     fn draw_indexed_indirect(
-        &mut self, buffer: &'a Buffer, offset: u64, draw_count: u32,
+        &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
     ) -> Result<()> {
         bounds_check_n(draw_count, 20, stride, buffer, offset)?;
@@ -298,7 +298,7 @@ impl<'a> CommandRecording<'a> {
         }
         self.graphics.check()?;
         unsafe {
-            (self.pool.device.fun.cmd_draw_indexed_indirect)(
+            (self.device.fun.cmd_draw_indexed_indirect)(
                 self.buffer.handle_mut(),
                 buffer.borrow(),
                 offset,
@@ -310,14 +310,14 @@ impl<'a> CommandRecording<'a> {
     }
 }
 
-impl<'a> CommandRecording<'a> {
+impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdDispatch)]
     pub fn dispatch(
         &mut self, group_count_x: u32, group_count_y: u32, group_count_z: u32,
     ) -> Result<()> {
         self.compute.check()?;
         unsafe {
-            (self.pool.device.fun.cmd_dispatch)(
+            (self.device.fun.cmd_dispatch)(
                 self.buffer.handle_mut(),
                 group_count_x,
                 group_count_y,
@@ -328,11 +328,11 @@ impl<'a> CommandRecording<'a> {
     }
     #[doc = crate::man_link!(vkCmdDispatchIndirect)]
     pub fn dispatch_indirect(
-        &mut self, buffer: &'a Buffer, offset: u64,
+        &mut self, buffer: &'pool Buffer, offset: u64,
     ) -> Result<()> {
         self.compute.check()?;
         unsafe {
-            (self.pool.device.fun.cmd_dispatch_indirect)(
+            (self.device.fun.cmd_dispatch_indirect)(
                 self.buffer.handle_mut(),
                 buffer.borrow(),
                 offset,
@@ -342,7 +342,7 @@ impl<'a> CommandRecording<'a> {
     }
 }
 
-impl<'a> ExternalRenderPassRecording<'a> {
+impl<'rec, 'pool> ExternalRenderPassRecording<'rec, 'pool> {
     /// Returns [Error::InvalidArgument] if 'commands' is empty, if a member of
     /// 'commands' is not in the executable state, or if a member of 'commands'
     /// is not compatible with the current pass and subpass. Returns
@@ -351,7 +351,7 @@ impl<'a> ExternalRenderPassRecording<'a> {
     ///
     #[doc = crate::man_link!(vkCmdExecuteCommands)]
     pub fn execute_commands(
-        &mut self, commands: &mut [&'a mut SecondaryCommandBuffer],
+        &mut self, commands: &mut [&'pool mut SecondaryCommandBuffer],
     ) -> Result<()> {
         let mut handles = bumpalo::vec![in self.rec.scratch];
         for command in commands.iter_mut() {
@@ -364,7 +364,7 @@ impl<'a> ExternalRenderPassRecording<'a> {
         }
 
         unsafe {
-            (self.rec.pool.device.fun.cmd_execute_commands)(
+            (self.rec.device.fun.cmd_execute_commands)(
                 self.rec.buffer.handle_mut(),
                 handles.len() as u32,
                 Array::from_slice(&handles).ok_or(Error::InvalidArgument)?,

@@ -20,10 +20,10 @@ pub mod update;
 /// A
 #[doc = crate::spec_link!("descriptor set layout", "14", "descriptorsets-setlayout")]
 #[derive(Debug, Eq)]
-pub struct DescriptorSetLayout<'d> {
+pub struct DescriptorSetLayout<'a> {
     handle: Handle<VkDescriptorSetLayout>,
-    bindings: Vec<DescriptorSetLayoutBinding<'d>>,
-    device: &'d Device<'d>,
+    bindings: Vec<DescriptorSetLayoutBinding<'a>>,
+    device: &'a Device<'a>,
 }
 
 /// Note that unlike in Vulkan, the binding number is implicitly the index of
@@ -43,12 +43,12 @@ pub struct DescriptorSetLayoutBinding<'a> {
     pub immutable_samplers: Vec<Ref<'a, VkSampler>>,
 }
 
-impl<'d> DescriptorSetLayout<'d> {
+impl<'a> DescriptorSetLayout<'a> {
     // TODO: vkGetDescriptorSetLayoutSupport
 
     #[doc = crate::man_link!(VkDescriptorSetLayout)]
     pub fn new(
-        device: &'d Device, bindings: Vec<DescriptorSetLayoutBinding<'d>>,
+        device: &'a Device, bindings: Vec<DescriptorSetLayoutBinding<'a>>,
     ) -> Result<Self> {
         for b in &bindings {
             if !b.immutable_samplers.is_empty()

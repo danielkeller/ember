@@ -45,9 +45,6 @@ pub mod ext;
 #[cfg(doc)]
 pub mod macos_instructions;
 
-use std::default;
-use std::marker::PhantomData;
-
 use crate::error::Result;
 use crate::types::*;
 
@@ -72,22 +69,48 @@ macro_rules! spec_link {
 }
 pub(crate) use spec_link;
 
+use core::marker::PhantomData as PD;
+
 struct Pool;
+struct RecSession<'pool>(&'pool mut Pool);
 
 impl Pool {
-    fn allocate(&self) -> CmdBuf {
-        todo!()
+    fn reset<'pool>(&'pool mut self) -> RecSession<'pool> {
+        RecSession(self)
     }
-    fn reset(&mut self) {}
+}
+impl<'pool> RecSession<'pool> {
+    fn begin<'rec>(&'rec mut self) -> CmdRecording<'rec, 'pool> {
+        CmdRecording(self)
+    }
+    fn record(&mut self) -> CmdBuf<'pool> {
+        CmdBuf(PD)
+    }
 }
 
-struct CmdBuf<'a>(PhantomData<&'a ()>);
+struct CmdBuf<'a>(PD<&'a ()>);
+struct CmdRecording<'rec, 'pool: 'rec>(&'rec mut RecSession<'pool>);
+
+impl<'rec, 'pool> CmdRecording<'rec, 'pool> {
+    fn record_thing(&mut self, _: &'pool Object) {}
+    fn record_secondary(&mut self, _: &'pool mut CmdBuf<'pool>) {}
+    fn end(self) -> CmdBuf<'pool> {
+        CmdBuf(PD)
+    }
+}
+impl CmdBuf<'_> {
+    fn submit(&mut self) {}
+}
 
 struct Object;
 
-impl<'a> CmdBuf<'a> {
-    fn record_thing(&mut self, _: &'a Object) {}
-    fn record_secondary(&mut self, _: &'a mut CmdBuf<'a>) {}
+struct PoolSet;
+
+impl PoolSet {
+    fn get_pool<'pool>(&'pool self) -> RecSession<'pool> {
+        RecSession(todo!())
+    }
+    fn reset(&mut self) {}
 }
 
 fn device<'a>() -> &'a vk::Device<'a> {
@@ -95,18 +118,41 @@ fn device<'a>() -> &'a vk::Device<'a> {
 }
 
 fn foo() {
-    let mut p = Pool;
-    let mut p1 = Pool;
+    let mut pool = Pool;
+    let mut pool1 = Pool;
+    let mut pool1_contents = pool1.reset();
+    let mut pool_contents = pool.reset();
 
-    let mut b = p.allocate();
-    let mut b1 = p.allocate();
-    let mut b2 = p1.allocate();
-    let mut b3 = p1.allocate();
+    let mut b = None;
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let mut b_rec = pool_contents.begin();
+            b_rec.record_thing(&Object);
+            b = Some(b_rec.end());
+        });
+    });
 
-    b.record_secondary(&mut b2);
-    b3.record_secondary(&mut b1);
-    p.reset();
-    p1.reset();
+    let mut b1_rec = pool1_contents.begin();
+    b1_rec.record_secondary(b.as_mut().unwrap());
+    let mut b1 = b1_rec.end();
+    b1.submit();
+    pool.reset();
+
+    let mut poolset = PoolSet;
+    // let mut cmds = vec![];
+    // [&Object, &Object]
+    //     .into_par_iter()
+    //     .map_init(
+    //         || poolset.get_pool(),
+    //         |pool, i| {
+    //             let mut rec = pool.begin();
+    //             rec.record_thing(i);
+    //             rec.end()
+    //         },
+    //     )
+    //     .collect_into_vec(&mut cmds);
+    // cmds[0].submit();
+    poolset.reset();
 }
 
 #[doc = crate::man_link!(vkEnumerateInstanceExtensionProperties)]
@@ -168,9 +214,9 @@ pub mod vk {
     pub use crate::enums::*;
     pub use crate::error::{Error, ErrorAndSelf, Result, ResultAndSelf};
     pub use crate::ext;
-    pub use crate::ext::khr_swapchain::{
-        CreateSwapchainFrom, SwapchainCreateInfoKHR,
-    };
+    // pub use crate::ext::khr_swapchain::{
+    //     CreateSwapchainFrom, SwapchainCreateInfoKHR,
+    // };
     pub use crate::fence::{Fence, PendingFence};
     pub use crate::ffi::*;
     pub use crate::framebuffer::Framebuffer;

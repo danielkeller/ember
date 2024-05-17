@@ -27,9 +27,9 @@ pub struct BufferWithoutMemory<'d> {
 #[doc = crate::spec_link!("buffer", "12", "resources-buffers")]
 /// with memory attached to it.
 #[derive(Debug)]
-pub struct Buffer<'d> {
-    inner: BufferWithoutMemory<'d>,
-    _memory: Subobject<MemoryLifetime<'d>>,
+pub struct Buffer<'a> {
+    inner: BufferWithoutMemory<'a>,
+    _memory: Subobject<MemoryLifetime<'a>>,
 }
 
 impl<'d> BufferWithoutMemory<'d> {
@@ -194,7 +194,7 @@ mod test {
     #[test]
     fn require_robust() {
         let inst = vk::Instance::new(&Default::default()).unwrap();
-        let (dev, _) = vk::Device::new(
+        let dev = vk::Device::new(
             &inst.enumerate_physical_devices().unwrap()[0],
             &vk::DeviceCreateInfo {
                 queue_create_infos: vk::slice(&[vk::DeviceQueueCreateInfo {

@@ -6,13 +6,13 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::cell::RefCell;
 use std::fmt::Debug;
 
 use crate::descriptor_set::DescriptorSetLayout;
 use crate::device::Device;
 use crate::enums::*;
 use crate::error::{Error, Result};
+use crate::exclusive::Exclusive;
 use crate::framebuffer::Framebuffer;
 use crate::pipeline::Pipeline;
 use crate::render_pass::RenderPass;
@@ -24,28 +24,34 @@ pub mod barrier;
 mod bind;
 mod draw;
 
+// TODO: CommandPoolSet, with reset(&mut self) and record(&self) -> RecordingSession
+
 /// A command pool.
 #[derive(Debug)]
 pub struct CommandPool<'d> {
     handle: Handle<VkCommandPool>,
-    buffers: RefCell<Vec<Handle<VkCommandBuffer>>>,
-    free_buffers: RefCell<Vec<usize>>,
+    buffers: Vec<Handle<VkCommandBuffer>>,
+    free_buffers: Vec<usize>,
     device: &'d Device<'d>,
-    scratch: bumpalo::Bump,
+    scratch: Exclusive<bumpalo::Bump>,
 }
+
+// TODO: Name
+#[derive(Debug)]
+pub struct RecordingSession<'pool>(&'pool mut CommandPool<'pool>);
 
 /// A primary command buffer.
 #[derive(Debug)]
-pub struct CommandBuffer<'a>(Mut<'a, VkCommandBuffer>);
+pub struct CommandBuffer<'pool>(Mut<'pool, VkCommandBuffer>);
 
 /// A secondary command buffer.
 ///
 ///
 /// Create with [`CommandPool::allocate_secondary`]
 #[derive(Debug)]
-pub struct SecondaryCommandBuffer<'a> {
-    buf: Mut<'a, VkCommandBuffer>,
-    pass: Option<&'a RenderPass<'a>>,
+pub struct SecondaryCommandBuffer<'pool> {
+    buf: Mut<'pool, VkCommandBuffer>,
+    pass: Option<&'pool RenderPass<'pool>>,
     subpass: u32,
 }
 
@@ -60,20 +66,20 @@ struct Bindings<'a> {
 
 /// An in-progress command buffer recording, outside of a render pass.
 #[derive(Debug)]
-pub struct CommandRecording<'a> {
-    pool: &'a CommandPool<'a>,
-    scratch: &'a bumpalo::Bump,
-    graphics: Bindings<'a>,
-    compute: Bindings<'a>,
-    buffer: CommandBuffer<'a>,
+pub struct CommandRecording<'rec, 'pool: 'rec> {
+    buffer: CommandBuffer<'pool>,
+    device: &'rec Device<'rec>,
+    scratch: &'rec bumpalo::Bump,
+    graphics: Bindings<'rec>,
+    compute: Bindings<'rec>,
 }
 
 /// An in-progress command buffer recording, inside a render pass.
 #[must_use = "Record render pass commands on this object"]
 #[derive(Debug)]
-pub struct RenderPassRecording<'a> {
-    rec: CommandRecording<'a>,
-    pass: &'a RenderPass<'a>,
+pub struct RenderPassRecording<'rec, 'pool> {
+    rec: CommandRecording<'rec, 'pool>,
+    pass: &'rec RenderPass<'pool>, // I think...
     subpass: u32,
 }
 
@@ -81,17 +87,17 @@ pub struct RenderPassRecording<'a> {
 /// is provided with secondary command buffers.
 #[must_use = "Record secondary command buffers on this object"]
 #[derive(Debug)]
-pub struct ExternalRenderPassRecording<'a> {
-    rec: CommandRecording<'a>,
-    pass: Arc<RenderPass<'a>>,
+pub struct ExternalRenderPassRecording<'rec, 'pool> {
+    rec: CommandRecording<'rec, 'pool>,
+    pass: Arc<RenderPass<'rec>>,
     subpass: u32,
 }
 
 /// An in-progress secondary command buffer recording, inside a render pass.
 #[derive(Debug)]
-pub struct SecondaryCommandRecording<'a> {
-    rec: CommandRecording<'a>,
-    pass: Arc<RenderPass<'a>>,
+pub struct SecondaryCommandRecording<'rec, 'pool> {
+    rec: CommandRecording<'rec, 'pool>,
+    pass: Arc<RenderPass<'rec>>,
     subpass: u32,
 }
 
@@ -122,7 +128,7 @@ impl<'d> CommandPool<'d> {
             buffers: Default::default(),
             free_buffers: Default::default(),
             device,
-            scratch: bumpalo::Bump::new(),
+            scratch: Default::default(),
         })
     }
 }
@@ -146,12 +152,11 @@ impl CommandPool<'_> {
     }
 
     fn len(&self) -> usize {
-        self.buffers.borrow().len()
+        self.buffers.len()
     }
-    fn reserve(&self, additional: u32) {
-        let mut vec = self.buffers.borrow_mut();
-        vec.reserve(additional as usize);
-        let old_len = vec.len();
+    fn reserve(&mut self, additional: u32) {
+        self.buffers.reserve(additional as usize);
+        let old_len = self.buffers.len();
         let new_len = old_len + additional as usize;
         unsafe {
             (self.device.fun.allocate_command_buffers)(
@@ -163,57 +168,64 @@ impl CommandPool<'_> {
                     level: CommandBufferLevel::PRIMARY,
                     count: additional,
                 },
-                ArrayMut::from_slice(vec.spare_capacity_mut()).unwrap(),
+                ArrayMut::from_slice(self.buffers.spare_capacity_mut())
+                    .unwrap(),
             )
             .unwrap();
-            vec.set_len(new_len);
+            self.buffers.set_len(new_len);
         }
-        self.free_buffers.borrow_mut().extend(old_len..new_len);
+        self.free_buffers.extend(old_len..new_len);
     }
+}
 
+impl<'d> CommandPool<'d> {
     /// Resets the pool and adds all command buffers to the free list.
     #[doc = crate::man_link!(vkResetCommandPool)]
-    pub fn reset(&mut self, flags: CommandPoolResetFlags) -> Result<()> {
+    pub fn reset<'pool>(&'pool mut self) -> Result<RecordingSession<'pool>> {
         unsafe {
             (self.device.fun.reset_command_pool)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
-                flags,
+                Default::default(),
             )?;
         }
-        self.free_buffers.borrow_mut().clear();
-        self.free_buffers.borrow_mut().extend(0..self.len());
-        self.scratch.reset();
-        Ok(())
+        self.free_buffers.clear();
+        self.free_buffers.extend(0..self.len());
+        self.scratch.get_mut().reset();
+        Ok(RecordingSession(self))
     }
+}
 
-    /// Begin a command buffer, allocating a new one if one is not available on the free list.
+impl<'pool> RecordingSession<'pool> {
+    /// Begin a command buffer, allocating a new one if one is not available on the free list. Command buffers have ONE_TIME_SUBMIT set.
     #[doc = crate::man_link!(vkAllocateCommandBuffers)]
     #[doc = crate::man_link!(vkBeginCommandBuffer)]
-    pub fn begin<'a>(&'a self) -> CommandRecording<'a> {
-        if self.free_buffers.borrow().is_empty() {
-            self.reserve(1)
+    pub fn begin<'rec>(&'rec mut self) -> CommandRecording<'rec, 'pool> {
+        if self.0.free_buffers.is_empty() {
+            self.0.reserve(1)
         }
-        let buffer = self.free_buffers.borrow_mut().pop().unwrap();
+        let buffer = self.0.free_buffers.pop().unwrap();
         // Safety: Moving the Handle<> doesn't actually invalidate the reference.
-        let mut buffer: Mut<'a, VkCommandBuffer> = unsafe {
-            self.buffers.borrow_mut()[buffer]
-                .borrow_mut()
-                .reborrow_mut_unchecked()
+        let mut buffer: Mut<'pool, VkCommandBuffer> = unsafe {
+            self.0.buffers[buffer].borrow_mut().reborrow_mut_unchecked()
         };
         unsafe {
-            (self.device.fun.begin_command_buffer)(
+            (self.0.device.fun.begin_command_buffer)(
                 buffer.reborrow_mut(),
-                &Default::default(),
+                &CommandBufferBeginInfo {
+                    flags: CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                    ..Default::default()
+                },
             )
             .unwrap();
         }
+        let scratch = self.0.scratch.get_mut();
         CommandRecording {
-            pool: self,
-            graphics: Bindings::new(&self.scratch),
-            compute: Bindings::new(&self.scratch),
-            scratch: &self.scratch,
             buffer: CommandBuffer(buffer),
+            device: self.0.device,
+            scratch,
+            graphics: Bindings::new(scratch),
+            compute: Bindings::new(scratch),
         }
     }
     /*
@@ -227,12 +239,6 @@ impl CommandPool<'_> {
     ) -> ResultAndSelf<SecondaryCommandRecording<'a>, SecondaryCommandBuffer>
     {
         if subpass >= render_pass.num_subpasses() {
-            return Err(ErrorAndSelf(Error::InvalidArgument, buffer));
-        }
-        if !Owner::ptr_eq(&self.res, &buffer.buf.pool)
-            // In executable state
-            || buffer.lock_resources().is_some()
-        {
             return Err(ErrorAndSelf(Error::InvalidArgument, buffer));
         }
         // In pending state
@@ -309,13 +315,11 @@ impl<'a> Bindings<'a> {
     }
 }
 
-impl<'a> CommandRecording<'a> {
+impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkEndCommandBuffer)]
-    pub fn end(mut self) -> Result<CommandBuffer<'a>> {
+    pub fn end(mut self) -> Result<CommandBuffer<'pool>> {
         unsafe {
-            (self.pool.device.fun.end_command_buffer)(
-                self.buffer.handle_mut(),
-            )?;
+            (self.device.fun.end_command_buffer)(self.buffer.handle_mut())?;
         }
         Ok(self.buffer)
     }
@@ -328,14 +332,15 @@ impl<'a> SecondaryCommandRecording<'a> {
     }
 }
 */
-impl<'a> CommandRecording<'a> {
+impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     /// Begins a render pass recorded inline. Returns [`Error::InvalidArgument`]
     /// if `framebuffer` and `render_pass` are not compatible.
     #[doc = crate::man_link!(vkCmdBeginRenderPass)]
     pub fn begin_render_pass(
-        mut self, render_pass: &'a RenderPass, framebuffer: &'a Framebuffer,
-        render_area: &Rect2D, clear_values: &[ClearValue],
-    ) -> Result<RenderPassRecording<'a>> {
+        mut self, render_pass: &'pool RenderPass<'pool>,
+        framebuffer: &'pool Framebuffer, render_area: &Rect2D,
+        clear_values: &[ClearValue],
+    ) -> Result<RenderPassRecording<'rec, 'pool>> {
         if !framebuffer.is_compatible_with(render_pass) {
             return Err(Error::InvalidArgument);
         }
@@ -348,7 +353,7 @@ impl<'a> CommandRecording<'a> {
             clear_values: clear_values.into(),
         };
         unsafe {
-            (self.pool.device.fun.cmd_begin_render_pass)(
+            (self.device.fun.cmd_begin_render_pass)(
                 self.buffer.handle_mut(),
                 &info,
                 SubpassContents::INLINE,
@@ -401,7 +406,7 @@ impl<'a> CommandRecording<'a> {
             clear_values: clear_values.into(),
         };
         unsafe {
-            (self.pool.device.fun.cmd_begin_render_pass)(
+            (self.device.fun.cmd_begin_render_pass)(
                 self.buffer.mut_handle(),
                 &info,
                 subpass_contents,
@@ -411,7 +416,7 @@ impl<'a> CommandRecording<'a> {
     }*/
 }
 
-impl<'a> RenderPassRecording<'a> {
+impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     /// Advance to the next subpass, recorded inline. Returns
     /// [`Error::OutOfBounds`] if this is the last subpass.
     #[doc = crate::man_link!(vkCmdNextSubpass)]
@@ -421,7 +426,7 @@ impl<'a> RenderPassRecording<'a> {
         }
         self.subpass += 1;
         unsafe {
-            (self.rec.pool.device.fun.cmd_next_subpass)(
+            (self.rec.device.fun.cmd_next_subpass)(
                 self.rec.buffer.handle_mut(),
                 SubpassContents::INLINE,
             )
@@ -453,12 +458,12 @@ impl<'a> RenderPassRecording<'a> {
     /// Ends the render pass. Returns [`Error::InvalidState`] if this is not the
     /// last subpass.
     #[doc = crate::man_link!(vkCmdEndRenderPass)]
-    pub fn end(mut self) -> Result<CommandRecording<'a>> {
+    pub fn end(mut self) -> Result<CommandRecording<'rec, 'pool>> {
         if self.subpass != self.pass.num_subpasses() - 1 {
             return Err(Error::InvalidState);
         }
         unsafe {
-            (self.rec.pool.device.fun.cmd_end_render_pass)(
+            (self.rec.device.fun.cmd_end_render_pass)(
                 self.rec.buffer.handle_mut(),
             );
         }

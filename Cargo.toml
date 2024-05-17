@@ -21,7 +21,7 @@ window = ["dep:raw-window-handle", "dep:raw-window-metal"]
 
 [dev-dependencies]
 # For doctests. See hello-triangle/Cargo.toml
-maia = { path = ".", features = [ "window" ] }
+maia = { path = ".", features = ["window"] }
 
 [target.'cfg(loom)'.dependencies]
 loom = "0.5"
