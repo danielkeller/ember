@@ -133,6 +133,14 @@ fn foo() {
         });
     });
 
+    let foo = 5;
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            foo == 7;
+            drop(foo);
+        });
+    });
+
     let mut b1_rec = pool1_contents.begin();
     b1_rec.record_secondary(b.as_mut().unwrap());
     let mut b1 = b1_rec.end();

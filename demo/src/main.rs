@@ -669,7 +669,7 @@ fn main() -> anyhow::Result<()> {
                 ),
                 vk::Submit::Command(&mut buf),
                 vk::Submit::Signal(&present_sem),
-            ])
+            ]);
         });
         swapchain.as_mut().unwrap().present(&mut queue, &img, present_sem)?;
         drop(buf);
