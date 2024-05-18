@@ -499,7 +499,7 @@ fn main() -> anyhow::Result<()> {
     let pipeline_layout = vk::PipelineLayout::new(
         &device,
         Default::default(),
-        vec![descriptor_set_layout.clone()],
+        vec![&descriptor_set_layout],
         vec![],
     )?;
 
@@ -600,11 +600,11 @@ fn main() -> anyhow::Result<()> {
             let fb = vk::Framebuffer::new(
                 &render_pass,
                 Default::default(),
-                vec![img_view],
+                vec![&img_view],
                 swapchain_size.into(),
             )?;
             let sem = vk::Semaphore::new(&device)?;
-            framebuffers.insert(img.clone(), (fb, sem));
+            framebuffers.insert(&img, (fb, sem));
         }
         let (framebuffer, present_sem) = framebuffers.get_mut(&img).unwrap();
 
@@ -664,19 +664,17 @@ fn main() -> anyhow::Result<()> {
         pass.execute_commands(&mut [&mut subpass])?;
         let mut buf = pass.end()?.end()?;
 
-        let pending_fence = queue.submit_with_fence(
-            &mut [vk::SubmitInfo1 {
-                wait: &mut [(
-                    &mut acquire_sem,
+        queue.scope(|s| {
+            s.submit([
+                vk::Submit::Wait(
+                    &acquire_sem,
                     vk::PipelineStageFlags::TOP_OF_PIPE,
-                )],
-                commands: &mut [&mut buf],
-                signal: &mut [present_sem],
-            }],
-            fence.take().unwrap(),
-        )?;
+                ),
+                vk::Submit::Command(&mut buf),
+                vk::Submit::Signal(&present_sem),
+            ])
+        });
         swapchain.as_mut().unwrap().present(&mut queue, &img, present_sem)?;
-        fence = Some(pending_fence.wait()?);
         drop(buf);
         cmd_pool.reset()?;
         Ok(())

@@ -35,7 +35,7 @@ pub struct ImageWithoutMemory<'d> {
 #[derive(Debug)]
 pub struct Image<'d> {
     inner: ImageWithoutMemory<'d>,
-    _memory: Option<Subobject<MemoryLifetime<'d>>>,
+    // _memory: Option<Subobject<MemoryLifetime<'d>>>,
 }
 
 #[derive(Debug)]
@@ -127,7 +127,7 @@ impl<'d> Image<'d> {
         } {
             return Err(ErrorAndSelf(err.into(), inner));
         }
-        Ok(Self { inner, _memory: Some(memory.resource()) })
+        Ok(Self { inner })
     }
 }
 

@@ -29,7 +29,7 @@ pub struct BufferWithoutMemory<'d> {
 #[derive(Debug)]
 pub struct Buffer<'a> {
     inner: BufferWithoutMemory<'a>,
-    _memory: Subobject<MemoryLifetime<'a>>,
+    // _memory: Subobject<MemoryLifetime<'a>>,
 }
 
 impl<'d> BufferWithoutMemory<'d> {
@@ -50,7 +50,7 @@ impl<'d> BufferWithoutMemory<'d> {
             handle: handle.unwrap(),
             len: info.size,
             usage: info.usage,
-            device: device,
+            device,
         })
     }
 }
@@ -61,10 +61,10 @@ impl<'d> Buffer<'d> {
     #[doc = crate::man_link!(vkBindBufferMemory)]
     pub fn new(
         buffer: BufferWithoutMemory<'d>, memory: &DeviceMemory<'d>, offset: u64,
-    ) -> ResultAndSelf<Self, BufferWithoutMemory<'d>> {
+    ) -> Result<Self> {
         assert_eq!(memory.device(), buffer.device);
         if !memory.check(offset, buffer.memory_requirements()) {
-            return Err(ErrorAndSelf(Error::InvalidArgument, buffer));
+            return Err(Error::InvalidArgument);
         }
         Self::bind_buffer_impl(buffer, memory, offset)
     }
@@ -72,18 +72,16 @@ impl<'d> Buffer<'d> {
     fn bind_buffer_impl(
         mut inner: BufferWithoutMemory<'d>, memory: &DeviceMemory<'d>,
         offset: u64,
-    ) -> ResultAndSelf<Buffer<'d>, BufferWithoutMemory<'d>> {
-        if let Err(err) = unsafe {
+    ) -> Result<Self> {
+        unsafe {
             (memory.device().fun.bind_buffer_memory)(
                 memory.device().handle(),
                 inner.handle.borrow_mut(),
                 memory.handle(),
                 offset,
-            )
-        } {
-            return Err(ErrorAndSelf(err.into(), inner));
+            )?;
         }
-        Ok(Buffer { inner, _memory: memory.resource() })
+        Ok(Buffer { inner })
     }
 }
 
@@ -157,21 +155,13 @@ impl<'d> BufferWithoutMemory<'d> {
     /// Allocate a single piece of memory for the buffer and bind it. Note that
     /// it is an error to bind a uniform, storage, vertex, or index buffer to
     /// host-visible memory when robust buffer access is not enabled.
-    pub fn allocate_memory(
-        self, memory_type_index: u32,
-    ) -> ResultAndSelf<Buffer<'d>, Self> {
+    pub fn allocate_memory(self, memory_type_index: u32) -> Result<Buffer<'d>> {
         let mem_req = self.memory_requirements();
         if (1 << memory_type_index) & mem_req.memory_type_bits == 0 {
-            return Err(ErrorAndSelf(Error::InvalidArgument, self));
+            return Err(Error::InvalidArgument);
         }
-        let memory = match DeviceMemory::new(
-            self.device,
-            mem_req.size,
-            memory_type_index,
-        ) {
-            Ok(memory) => memory,
-            Err(err) => return Err(ErrorAndSelf(err, self)),
-        };
+        let memory =
+            DeviceMemory::new(self.device, mem_req.size, memory_type_index)?;
         // Don't need to check requirements
         Buffer::bind_buffer_impl(self, &memory, 0)
     }

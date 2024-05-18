@@ -868,7 +868,8 @@ pub struct VkShaderModuleCreateInfo<'a, Next = Null> {
     pub stype: ShaderModuleCreateInfoType,
     pub next: Next,
     pub flags: ShaderModuleCreateFlags,
-    pub code: Bytes<'a>,
+    pub code_size: usize,
+    pub code: Array<'a, u32>,
 }
 structure_type!(ShaderModuleCreateInfoType, 16);
 

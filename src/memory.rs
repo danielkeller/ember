@@ -24,7 +24,8 @@ pub struct MemoryLifetime<'d> {
 #[doc = crate::spec_link!("device memory", "11", "memory-device")]
 #[derive(Debug)]
 pub struct DeviceMemory<'d> {
-    inner: Owner<MemoryLifetime<'d>>,
+    // inner: Owner<MemoryLifetime<'d>>,
+    inner: PhantomData<&'d ()>,
     allocation_size: u64,
     memory_type_index: u32,
 }
@@ -62,29 +63,30 @@ impl<'d> DeviceMemory<'d> {
         Ok(Self {
             allocation_size,
             memory_type_index,
-            inner: Owner::new(MemoryLifetime {
-                handle: handle.unwrap(),
-                device: device.clone(),
-            }),
+            inner: PhantomData,
+            // inner: Owner::new(MemoryLifetime {
+            //     handle: handle.unwrap(),
+            //     device: device.clone(),
+            // }),
         })
     }
 
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkDeviceMemory> {
-        self.inner.handle.borrow()
+        todo!() //self.inner.handle.borrow()
     }
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkDeviceMemory> {
-        self.inner.handle.borrow_mut()
+        todo!() //self.inner.handle.borrow_mut()
     }
     /// Returns the associated device.
     pub fn device(&self) -> &Device {
-        self.inner.device
+        todo!() //self.inner.device)
     }
     /// Extend the lifetime of the memory until the returned object is dropped.
-    pub(crate) fn resource(&self) -> Subobject<MemoryLifetime<'d>> {
-        Subobject::new(&self.inner)
-    }
+    // pub(crate) fn resource(&self) -> Subobject<MemoryLifetime<'d>> {
+    //     Subobject::new(&self.inner)
+    // }
     /// Check if the memory meets `requirements` at the given offset.
     pub fn check(&self, offset: u64, requirements: MemoryRequirements) -> bool {
         let (end, overflow) = offset.overflowing_add(requirements.size);
@@ -134,27 +136,23 @@ pub struct MemoryWrite<'a> {
 impl<'d> DeviceMemory<'d> {
     /// Map the memory so it can be written to. Returns [`Error::OutOfBounds`] if
     /// `offset` and `size` are out of bounds.
-    pub fn map(
-        mut self, offset: u64, size: usize,
-    ) -> ResultAndSelf<MappedMemory<'d>, Self> {
+    pub fn map(mut self, offset: u64, size: usize) -> Result<MappedMemory<'d>> {
         let (end, overflow) = offset.overflowing_add(size as u64);
         if overflow || end > self.allocation_size || size > isize::MAX as usize
         {
-            return Err(ErrorAndSelf(Error::OutOfBounds, self));
+            return Err(Error::OutOfBounds);
         }
-        let inner = &mut *self.inner;
+        let inner: MemoryLifetime = todo!(); // &mut *self.inner;
         let mut ptr = std::ptr::null_mut();
         unsafe {
-            if let Err(err) = (inner.device.fun.map_memory)(
+            (inner.device.fun.map_memory)(
                 inner.device.handle(),
                 inner.handle.borrow_mut(),
                 offset,
                 size as u64,
                 Default::default(),
                 &mut ptr,
-            ) {
-                return Err(ErrorAndSelf(err.into(), self));
-            }
+            )?;
         }
         Ok(MappedMemory { memory: self, size, ptr: NonNull::new(ptr).unwrap() })
     }
@@ -172,7 +170,8 @@ impl Drop for MappedMemory<'_> {
 
 impl<'d> MappedMemory<'d> {
     fn unmap_impl(&mut self) {
-        let inner = &mut *self.memory.inner;
+        // let inner = &mut *self.memory.inner;
+        let inner: MemoryLifetime = todo!();
         unsafe {
             (inner.device.fun.unmap_memory)(
                 inner.device.handle(),

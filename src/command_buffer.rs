@@ -26,19 +26,28 @@ mod draw;
 
 // TODO: CommandPoolSet, with reset(&mut self) and record(&self) -> RecordingSession
 
-/// A command pool.
 #[derive(Debug)]
-pub struct CommandPool<'d> {
+struct PoolInner {
     handle: Handle<VkCommandPool>,
     buffers: Vec<Handle<VkCommandBuffer>>,
     free_buffers: Vec<usize>,
-    device: &'d Device<'d>,
     scratch: Exclusive<bumpalo::Bump>,
+}
+
+/// A command pool.
+#[derive(Debug)]
+pub struct CommandPool<'d> {
+    inner: PoolInner,
+    device: &'d Device<'d>,
 }
 
 // TODO: Name
 #[derive(Debug)]
-pub struct RecordingSession<'pool>(&'pool mut CommandPool<'pool>);
+pub struct RecordingSession<'pool> {
+    // Split up to keep 'pool covariant
+    inner: &'pool mut PoolInner,
+    device: &'pool Device<'pool>,
+}
 
 /// A primary command buffer.
 #[derive(Debug)]
@@ -124,11 +133,13 @@ impl<'d> CommandPool<'d> {
         let handle = handle.unwrap();
 
         Ok(CommandPool {
-            handle,
-            buffers: Default::default(),
-            free_buffers: Default::default(),
+            inner: PoolInner {
+                handle,
+                buffers: Default::default(),
+                free_buffers: Default::default(),
+                scratch: Default::default(),
+            },
             device,
-            scratch: Default::default(),
         })
     }
 }
@@ -138,33 +149,25 @@ impl Drop for CommandPool<'_> {
         unsafe {
             (self.device.fun.destroy_command_pool)(
                 self.device.handle(),
-                self.handle.borrow_mut(),
+                self.inner.handle.borrow_mut(),
                 None,
             )
         }
     }
 }
 
-impl CommandPool<'_> {
-    /// Borrows the inner Vulkan handle.
-    pub fn handle_mut(&mut self) -> Mut<VkCommandPool> {
-        self.handle.borrow_mut()
-    }
-
-    fn len(&self) -> usize {
-        self.buffers.len()
-    }
-    fn reserve(&mut self, additional: u32) {
+impl PoolInner {
+    fn reserve(&mut self, device: &Device, additional: u32) {
         self.buffers.reserve(additional as usize);
         let old_len = self.buffers.len();
         let new_len = old_len + additional as usize;
         unsafe {
-            (self.device.fun.allocate_command_buffers)(
-                self.device.handle(),
+            (device.fun.allocate_command_buffers)(
+                device.handle(),
                 &CommandBufferAllocateInfo {
                     stype: Default::default(),
                     next: Default::default(),
-                    pool: self.handle.borrow_mut_unchecked(),
+                    pool: self.handle.borrow_mut(),
                     level: CommandBufferLevel::PRIMARY,
                     count: additional,
                 },
@@ -178,6 +181,21 @@ impl CommandPool<'_> {
     }
 }
 
+impl CommandPool<'_> {
+    /// Borrows the inner Vulkan handle.
+    pub fn handle_mut(&mut self) -> Mut<VkCommandPool> {
+        self.inner.handle.borrow_mut()
+    }
+
+    fn len(&self) -> usize {
+        self.inner.buffers.len()
+    }
+
+    fn reserve(&mut self, additional: u32) {
+        self.inner.reserve(self.device, additional)
+    }
+}
+
 impl<'d> CommandPool<'d> {
     /// Resets the pool and adds all command buffers to the free list.
     #[doc = crate::man_link!(vkResetCommandPool)]
@@ -185,14 +203,14 @@ impl<'d> CommandPool<'d> {
         unsafe {
             (self.device.fun.reset_command_pool)(
                 self.device.handle(),
-                self.handle.borrow_mut(),
+                self.inner.handle.borrow_mut(),
                 Default::default(),
             )?;
         }
-        self.free_buffers.clear();
-        self.free_buffers.extend(0..self.len());
-        self.scratch.get_mut().reset();
-        Ok(RecordingSession(self))
+        self.inner.free_buffers.clear();
+        self.inner.free_buffers.extend(0..self.len());
+        self.inner.scratch.get_mut().reset();
+        Ok(RecordingSession { inner: &mut self.inner, device: self.device })
     }
 }
 
@@ -201,16 +219,16 @@ impl<'pool> RecordingSession<'pool> {
     #[doc = crate::man_link!(vkAllocateCommandBuffers)]
     #[doc = crate::man_link!(vkBeginCommandBuffer)]
     pub fn begin<'rec>(&'rec mut self) -> CommandRecording<'rec, 'pool> {
-        if self.0.free_buffers.is_empty() {
-            self.0.reserve(1)
+        if self.inner.free_buffers.is_empty() {
+            self.inner.reserve(self.device, 1)
         }
-        let buffer = self.0.free_buffers.pop().unwrap();
+        let buffer = self.inner.free_buffers.pop().unwrap();
         // Safety: Moving the Handle<> doesn't actually invalidate the reference.
         let mut buffer: Mut<'pool, VkCommandBuffer> = unsafe {
-            self.0.buffers[buffer].borrow_mut().reborrow_mut_unchecked()
+            self.inner.buffers[buffer].borrow_mut().reborrow_mut_unchecked()
         };
         unsafe {
-            (self.0.device.fun.begin_command_buffer)(
+            (self.device.fun.begin_command_buffer)(
                 buffer.reborrow_mut(),
                 &CommandBufferBeginInfo {
                     flags: CommandBufferUsageFlags::ONE_TIME_SUBMIT,
@@ -219,10 +237,10 @@ impl<'pool> RecordingSession<'pool> {
             )
             .unwrap();
         }
-        let scratch = self.0.scratch.get_mut();
+        let scratch = self.inner.scratch.get_mut();
         CommandRecording {
             buffer: CommandBuffer(buffer),
-            device: self.0.device,
+            device: self.device,
             scratch,
             graphics: Bindings::new(scratch),
             compute: Bindings::new(scratch),

@@ -9,7 +9,6 @@
 use bumpalo::collections::Vec as BumpVec;
 use std::cell::RefCell;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 
 use crate::cleanup_queue::CleanupQueue;
 use crate::command_buffer::CommandBuffer;
@@ -60,7 +59,7 @@ impl Device<'_> {
         }
         Queue {
             handle: handle.unwrap(),
-            device: self.clone(),
+            device: self,
             resources: CleanupQueue::new(100),
             scratch: Exclusive::new(bumpalo::Bump::new()),
         }
@@ -78,15 +77,20 @@ impl Queue<'_> {
     }
 }
 
-// It's possible that scope() is sound with a mutable reference to the
-// SubmitScope, so RefCell would be unneccessary.
-struct ScopeCleanup<'env>(RefCell<&'env mut Queue<'env>>);
+pub struct SubmitScope<'env> {
+    handle: RefCell<Mut<'env, VkQueue>>,
+    device: &'env Device<'env>,
+    scratch: &'env bumpalo::Bump,
+}
 
-impl Drop for ScopeCleanup<'_> {
+impl Drop for SubmitScope<'_> {
     fn drop(&mut self) {
-        let queue = self.0.get_mut();
-        if unsafe { (queue.device.fun.queue_wait_idle)(queue.mut_handle()) }
-            .is_err()
+        if unsafe {
+            (self.device.fun.queue_wait_idle)(
+                self.handle.borrow_mut().reborrow_mut(),
+            )
+        }
+        .is_err()
         {
             // Potentially in some cases (eg device loss) this is actually
             // recoverable since the other destructors will fail in the same
@@ -97,35 +101,77 @@ impl Drop for ScopeCleanup<'_> {
     }
 }
 
-pub struct SubmitScope<'scope, 'env: 'scope> {
-    queue: ScopeCleanup<'env>,
-    scope: PhantomData<&'scope mut &'scope ()>,
-    env: PhantomData<&'env mut &'env ()>,
-}
-
-impl<'env> Queue<'env> {
-    pub fn scope<F>(&'env mut self, f: F)
+impl<'d> Queue<'d> {
+    pub fn scope<'env, F>(&'env mut self, f: F)
     where
-        F: for<'scope> FnOnce(&'scope SubmitScope<'scope, 'env>),
+        F: for<'scope> FnOnce(&'scope SubmitScope<'env>),
     {
         f(&SubmitScope {
-            queue: ScopeCleanup(RefCell::new(self)),
-            scope: PhantomData,
-            env: PhantomData,
+            handle: self.handle.borrow_mut().into(),
+            device: self.device,
+            scratch: self.scratch.get_mut(),
         });
     }
 
     /// Scoped submit that allows new commands to be submitted before the
     /// previous ones complete. This can improve device utilization because
     /// draining and refilling work queues on the device takes some time.
-    pub fn double_buffered_scope<F, T>(
+    pub fn double_buffered_scope<'env, F, T>(
         &'env mut self, (_a, _b): (&'env mut T, &'env mut T), _f: F,
     ) where
-        F: for<'scope> FnMut(
-            &'scope SubmitScope<'scope, 'env>,
-            &'scope mut T,
-        ) -> bool,
+        F: for<'scope> FnMut(&'scope SubmitScope<'env>, &'scope mut T) -> bool,
     {
+    }
+
+    #[doc = crate::man_link!(vkQueueWaitIdle)]
+    pub fn wait_idle(&mut self) -> Result<()> {
+        unsafe { (self.device.fun.queue_wait_idle)(self.handle.borrow_mut())? };
+        self.resources.new_cleanup().cleanup();
+        Ok(())
+    }
+}
+
+#[doc = crate::man_link!(VkSubmitInfo)]
+pub enum Submit<'a> {
+    Wait(&'a Semaphore<'a>, PipelineStageFlags),
+    Command(&'a mut CommandBuffer<'a>),
+    Signal(&'a Semaphore<'a>),
+}
+
+impl<'env> SubmitScope<'env> {
+    pub fn submit<'scope>(
+        &'scope self, infos: impl IntoIterator<Item = Submit<'env>>,
+    ) {
+        let mut builder = SubmitBuilder {
+            scratch: self.scratch,
+            submits: bumpalo::vec![in self.scratch],
+            wait: bumpalo::vec![in self.scratch],
+            masks: bumpalo::vec![in self.scratch],
+            commands: bumpalo::vec![in self.scratch],
+            signal: bumpalo::vec![in self.scratch],
+        };
+        for info in infos {
+            match info {
+                Submit::Wait(semaphore, wait_stage_mask) => {
+                    builder.add_wait(semaphore.handle(), wait_stage_mask)
+                }
+                Submit::Command(cmd) => builder.add_command(cmd.handle_mut()),
+                Submit::Signal(semaphore) => {
+                    builder.add_signal(semaphore.handle())
+                }
+            }
+        }
+        builder.advance();
+
+        unsafe {
+            (self.device.fun.queue_submit)(
+                self.handle.borrow_mut().reborrow_mut(),
+                builder.submits.len() as u32,
+                Array::from_slice(&builder.submits),
+                None,
+            )
+        }
+        .unwrap();
     }
 }
 
@@ -174,59 +220,6 @@ impl<'bump> SubmitBuilder<'bump> {
     }
     fn add_signal(&mut self, signal: Ref<'bump, VkSemaphore>) {
         self.signal.push(signal);
-    }
-}
-
-#[doc = crate::man_link!(VkSubmitInfo)]
-pub enum Submit<'a> {
-    Wait(&'a Semaphore<'a>, PipelineStageFlags),
-    Command(&'a mut CommandBuffer<'a>),
-    Signal(&'a Semaphore<'a>),
-}
-
-impl<'scope, 'env> SubmitScope<'scope, 'env> {
-    pub fn submit(&'scope self, infos: &mut [Submit<'scope>]) {
-        let queue = &mut *self.queue.0.borrow_mut();
-        let scratch = queue.scratch.get_mut();
-        let mut builder = SubmitBuilder {
-            scratch,
-            submits: bumpalo::vec![in scratch],
-            wait: bumpalo::vec![in scratch],
-            masks: bumpalo::vec![in scratch],
-            commands: bumpalo::vec![in scratch],
-            signal: bumpalo::vec![in scratch],
-        };
-        for info in infos {
-            match info {
-                Submit::Wait(semaphore, wait_stage_mask) => {
-                    builder.add_wait(semaphore.handle(), *wait_stage_mask)
-                }
-                Submit::Command(cmd) => builder.add_command(cmd.handle_mut()),
-                Submit::Signal(semaphore) => {
-                    builder.add_signal(semaphore.handle())
-                }
-            }
-        }
-        builder.advance();
-
-        unsafe {
-            (queue.device.fun.queue_submit)(
-                queue.handle.borrow_mut(),
-                builder.submits.len() as u32,
-                Array::from_slice(&builder.submits),
-                None,
-            )
-        }
-        .unwrap();
-    }
-}
-
-impl Queue<'_> {
-    #[doc = crate::man_link!(vkQueueWaitIdle)]
-    pub fn wait_idle(&mut self) -> Result<()> {
-        unsafe { (self.device.fun.queue_wait_idle)(self.handle.borrow_mut())? };
-        self.resources.new_cleanup().cleanup();
-        Ok(())
     }
 }
 

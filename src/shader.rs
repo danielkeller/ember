@@ -8,6 +8,7 @@
 
 use crate::device::Device;
 use crate::error::{Error, Result};
+use crate::ffi::Array;
 use crate::types::*;
 
 /// A
@@ -31,7 +32,8 @@ impl<'d> ShaderModule<'d> {
                     stype: Default::default(),
                     next: Default::default(),
                     flags: Default::default(),
-                    code: code.into(),
+                    code_size: 4 * code.len(),
+                    code: Array::from_slice(code).unwrap(),
                 },
                 None,
                 &mut handle,
