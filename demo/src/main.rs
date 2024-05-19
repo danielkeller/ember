@@ -13,8 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context;
-use inline_spirv::include_spirv;
-use maia::vk;
+use maia::vk::{self, BufferWithoutMemory};
 use ultraviolet::{Mat4, Vec3};
 
 fn find_right_directory() -> anyhow::Result<()> {
@@ -131,7 +130,7 @@ fn upload_data(
     dst_access_mask: vk::AccessFlags,
 ) -> anyhow::Result<()> {
     let staging_buffer = vk::BufferWithoutMemory::new(
-        &device,
+        device,
         &vk::BufferCreateInfo {
             size: src.len() as u64,
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
@@ -144,7 +143,7 @@ fn upload_data(
         vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     );
-    let memory = vk::DeviceMemory::new(&device, mem_size, host_mem)?;
+    let memory = vk::DeviceMemory::new(device, mem_size, host_mem)?;
     let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
     let mut memory = memory.map(0, src.len())?;
     memory.write_at(0).write_all(src)?;
@@ -163,16 +162,14 @@ fn upload_data(
         dst_access_mask,
     );
     let mut transfer = transfer.end()?;
-    let fence = vk::Fence::new(device)?;
     queue.scope(|s| {
-        s.submit(&mut [vk::Submit::Command(&mut transfer)]);
-        s.submit(&mut [vk::Submit::Command(&mut transfer)]);
+        s.submit([vk::Submit::Command(&mut transfer)]);
     });
     Ok(())
 }
 
 fn upload_image(
-    device: &Arc<vk::Device>, queue: &mut vk::Queue, image: &Arc<vk::Image>,
+    device: &vk::Device, queue: &mut vk::Queue, image: &vk::Image,
     cmd_pool: &mut vk::CommandPool,
 ) -> anyhow::Result<()> {
     let image_file = std::fs::File::open("assets/texture.jpg")?;
@@ -204,7 +201,8 @@ fn upload_image(
     }
     memory.unmap();
 
-    let mut transfer = cmd_pool.begin();
+    let recording_session = &mut cmd_pool.reset()?;
+    let mut transfer = recording_session.begin();
     transfer.image_barrier(
         image,
         vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -233,17 +231,18 @@ fn upload_image(
         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     );
     let mut transfer = transfer.end()?;
-    let fence = vk::Fence::new(device)?;
-    let pending_fence = queue.submit_with_fence(
-        &mut [vk::SubmitInfo1 {
-            commands: &mut [&mut transfer],
-            ..Default::default()
-        }],
-        fence,
-    )?;
-    pending_fence.wait()?;
+    queue.scope(|s| s.submit([vk::Submit::Command(&mut transfer)]));
 
     Ok(())
+}
+
+macro_rules! shader {
+    ($name:literal) => {{
+        const BYTES: &[u8] =
+            include_bytes!(concat!(env!("OUT_DIR"), "/shaders/", $name));
+        // Align to u32.
+        &bytemuck::cast_slice(BYTES).to_vec()
+    }};
 }
 
 fn main() -> anyhow::Result<()> {
@@ -306,18 +305,19 @@ fn main() -> anyhow::Result<()> {
     let window_size = window.inner_size();
     let mut swapchain_size =
         vk::Extent2D { width: window_size.width, height: window_size.height };
-    let mut swapchain = Some(vk::ext::SwapchainKHR::new(
-        &device,
-        vk::CreateSwapchainFrom::Surface(surf),
-        vk::SwapchainCreateInfoKHR {
-            min_image_count: 3,
-            image_format: vk::Format::B8G8R8A8_SRGB,
-            image_extent: swapchain_size,
-            image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | vk::ImageUsageFlags::TRANSFER_DST,
-            ..Default::default()
-        },
-    )?);
+    // let mut swapchain = Some(vk::ext::SwapchainKHR::new(
+    //     &device,
+    //     vk::CreateSwapchainFrom::Surface(surf),
+    //     vk::SwapchainCreateInfoKHR {
+    //         min_image_count: 3,
+    //         image_format: vk::Format::B8G8R8A8_SRGB,
+    //         image_extent: swapchain_size,
+    //         image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+    //             | vk::ImageUsageFlags::TRANSFER_DST,
+    //         ..Default::default()
+    //     },
+    // )?);
+    let mut swapchain = todo!();
 
     let mut cmd_pool = vk::CommandPool::new(&device, queue_family)?;
 
@@ -432,15 +432,10 @@ fn main() -> anyhow::Result<()> {
         },
     )?;
 
-    // TODO: rust-analyzer doesn't like this now and shaderc is annoying, maybe switching to WGSL and naga is nicer?
-    let vertex_shader = vk::ShaderModule::new(
-        &device,
-        include_spirv!("shaders/triangle.vert", vert),
-    )?;
-    let fragment_shader = vk::ShaderModule::new(
-        &device,
-        include_spirv!("shaders/triangle.frag", frag),
-    )?;
+    let vertex_shader =
+        vk::ShaderModule::new(&device, shader!("triangle.vert"))?;
+    let fragment_shader =
+        vk::ShaderModule::new(&device, shader!("triangle.frag"))?;
 
     let descriptor_set_layout = vk::DescriptorSetLayout::new(
         &device,
@@ -458,7 +453,8 @@ fn main() -> anyhow::Result<()> {
                 immutable_samplers: vec![vk::Sampler::new(
                     &device,
                     &Default::default(),
-                )?],
+                )?
+                .handle()],
             },
         ],
     )?;
@@ -682,7 +678,7 @@ fn main() -> anyhow::Result<()> {
         swapchain.as_mut().unwrap().present(&mut queue, &img, present_sem)?;
         fence = Some(pending_fence.wait()?);
         drop(buf);
-        cmd_pool.reset(Default::default())?;
+        cmd_pool.reset()?;
         Ok(())
     };
 

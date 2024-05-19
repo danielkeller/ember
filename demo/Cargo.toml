@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-maia = { path = "..", features = [ "window" ] }
+maia = { path = "..", features = ["window"] }
 winit = "0.26"
-anyhow = { version = "1.0", features = [ "backtrace" ] }
-inline-spirv = "0.1"
-bytemuck = { version = "1.0", features = [ "derive" ] }
-ultraviolet = { version = "0.9", features = [ "bytemuck" ] }
-jpeg-decoder = { version = "0.2",  default-features = false }
+anyhow = { version = "1.0", features = ["backtrace"] }
+bytemuck = { version = "1.0", features = ["derive"] }
+ultraviolet = { version = "0.9", features = ["bytemuck"] }
+jpeg-decoder = { version = "0.2", default-features = false }
+
+[build-dependencies]
+shaderc = "0.8"
