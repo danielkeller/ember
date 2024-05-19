@@ -259,7 +259,7 @@ impl<'u, 's: 'u> DescriptorSetUpdate<'u, 's> {
         let buffer_infos =
             self.updates.bump.alloc_slice_fill_iter(buffers.iter().map(|b| {
                 VkDescriptorBufferInfo {
-                    buffer: b.buffer.borrow(),
+                    buffer: b.buffer.handle(),
                     offset: b.offset,
                     range: b.range.unwrap_or(u64::MAX),
                 }

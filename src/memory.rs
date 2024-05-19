@@ -9,23 +9,16 @@
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use crate::error::{Error, ErrorAndSelf, Result, ResultAndSelf};
-use crate::subobject::{Owner, Subobject};
+use crate::error::{Error, Result};
 use crate::types::*;
 use crate::vk::Device;
-
-#[derive(Debug)]
-pub struct MemoryLifetime<'d> {
-    handle: Handle<VkDeviceMemory>,
-    device: &'d Device<'d>,
-}
 
 /// A piece of
 #[doc = crate::spec_link!("device memory", "11", "memory-device")]
 #[derive(Debug)]
 pub struct DeviceMemory<'d> {
-    // inner: Owner<MemoryLifetime<'d>>,
-    inner: PhantomData<&'d ()>,
+    handle: Handle<VkDeviceMemory>,
+    device: &'d Device<'d>,
     allocation_size: u64,
     memory_type_index: u32,
 }
@@ -61,32 +54,29 @@ impl<'d> DeviceMemory<'d> {
             result?;
         }
         Ok(Self {
+            handle: handle.unwrap(),
+            device,
             allocation_size,
             memory_type_index,
-            inner: PhantomData,
-            // inner: Owner::new(MemoryLifetime {
-            //     handle: handle.unwrap(),
-            //     device: device.clone(),
-            // }),
         })
     }
 
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkDeviceMemory> {
-        todo!() //self.inner.handle.borrow()
+        self.handle.borrow()
     }
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkDeviceMemory> {
-        todo!() //self.inner.handle.borrow_mut()
+        self.handle.borrow_mut()
     }
     /// Returns the associated device.
     pub fn device(&self) -> &Device {
-        todo!() //self.inner.device)
+        self.device
     }
-    /// Extend the lifetime of the memory until the returned object is dropped.
-    // pub(crate) fn resource(&self) -> Subobject<MemoryLifetime<'d>> {
-    //     Subobject::new(&self.inner)
-    // }
+    /// Returns the size of the memory in bytes.
+    pub fn len(&self) -> u64 {
+        self.allocation_size
+    }
     /// Check if the memory meets `requirements` at the given offset.
     pub fn check(&self, offset: u64, requirements: MemoryRequirements) -> bool {
         let (end, overflow) = offset.overflowing_add(requirements.size);
@@ -97,7 +87,7 @@ impl<'d> DeviceMemory<'d> {
     }
 }
 
-impl Drop for MemoryLifetime<'_> {
+impl Drop for DeviceMemory<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.free_memory)(
@@ -135,19 +125,19 @@ pub struct MemoryWrite<'a> {
 #[allow(clippy::len_without_is_empty)]
 impl<'d> DeviceMemory<'d> {
     /// Map the memory so it can be written to. Returns [`Error::OutOfBounds`] if
-    /// `offset` and `size` are out of bounds.
+    /// `offset` and `size` are out of bounds. Currently, memory cannot be mapped
+    /// or unmapped while buffers are bound to it.
     pub fn map(mut self, offset: u64, size: usize) -> Result<MappedMemory<'d>> {
         let (end, overflow) = offset.overflowing_add(size as u64);
         if overflow || end > self.allocation_size || size > isize::MAX as usize
         {
             return Err(Error::OutOfBounds);
         }
-        let inner: MemoryLifetime = todo!(); // &mut *self.inner;
         let mut ptr = std::ptr::null_mut();
         unsafe {
-            (inner.device.fun.map_memory)(
-                inner.device.handle(),
-                inner.handle.borrow_mut(),
+            (self.device.fun.map_memory)(
+                self.device.handle(),
+                self.handle.borrow_mut(),
                 offset,
                 size as u64,
                 Default::default(),
@@ -156,40 +146,26 @@ impl<'d> DeviceMemory<'d> {
         }
         Ok(MappedMemory { memory: self, size, ptr: NonNull::new(ptr).unwrap() })
     }
-    /// Returns the size of the memory in bytes.
-    pub fn len(&self) -> u64 {
-        self.allocation_size
-    }
 }
 
-impl Drop for MappedMemory<'_> {
-    fn drop(&mut self) {
-        self.unmap_impl()
+impl<'d> std::ops::Deref for MappedMemory<'d> {
+    type Target = DeviceMemory<'d>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.memory
     }
 }
 
 impl<'d> MappedMemory<'d> {
-    fn unmap_impl(&mut self) {
-        // let inner = &mut *self.memory.inner;
-        let inner: MemoryLifetime = todo!();
+    /// Unmaps the memory.
+    pub fn unmap(mut self) -> DeviceMemory<'d> {
         unsafe {
-            (inner.device.fun.unmap_memory)(
-                inner.device.handle(),
-                inner.handle.borrow_mut(),
+            (self.device.fun.unmap_memory)(
+                self.device.handle(),
+                self.memory.handle.borrow_mut(),
             )
         }
-    }
-
-    /// Unmaps the memory
-    pub fn unmap(mut self) -> DeviceMemory<'d> {
-        self.unmap_impl();
-        let no_drop = std::mem::ManuallyDrop::new(self);
-        unsafe { std::ptr::addr_of!(no_drop.memory).read() }
-    }
-
-    /// Gets the associated memory object
-    pub fn memory(&self) -> &DeviceMemory<'d> {
-        &self.memory
+        self.memory
     }
 
     /// Read the memory's contents. It may be garbage (although it won't be

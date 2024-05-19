@@ -53,6 +53,7 @@ macro_rules! man_link{
         concat!("(see [`", stringify!($name), "`](https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/", stringify!($name), ".html))")
     }
 }
+
 pub(crate) use man_link;
 macro_rules! spec_link {
     ($text:literal, $chapter:literal, $hash:literal) => {
@@ -135,6 +136,7 @@ fn foo() {
     let mut b1_rec = pool1_contents.begin();
     b1_rec.record_secondary(b.as_mut().unwrap());
     let mut b1 = b1_rec.end();
+    drop(pool1_contents);
     b1.submit();
     pool.reset();
 
@@ -199,7 +201,7 @@ pub(crate) fn test_device() -> Result<(Arc<device::Device>, queue::Queue)> {
 pub mod vk {
     pub use crate::buffer::{Buffer, BufferWithoutMemory};
     pub use crate::command_buffer::{
-        CommandBuffer, CommandPool, CommandRecording,
+        CommandBuffer, CommandPoolLifetime, CommandRecording,
         ExternalRenderPassRecording, RenderPassRecording,
         SecondaryCommandBuffer, SecondaryCommandRecording,
     };
@@ -226,7 +228,7 @@ pub mod vk {
     pub use crate::instance::Instance;
     pub use crate::instance_extension_properties;
     pub use crate::memory::{
-        DeviceMemory, MappedMemory, MemoryRead, MemoryWrite,
+        DeviceMemoryLifetime, MappedMemory, MemoryRead, MemoryWrite,
     };
     pub use crate::physical_device::PhysicalDevice;
     pub use crate::pipeline::{

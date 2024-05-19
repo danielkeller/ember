@@ -125,9 +125,9 @@ fn memory_type(
 }
 
 fn upload_data(
-    device: &vk::Device, queue: &mut vk::Queue, cmd_pool: &mut vk::CommandPool,
-    src: &[u8], dst: &vk::Buffer, dst_stage_mask: vk::PipelineStageFlags,
-    dst_access_mask: vk::AccessFlags,
+    device: &vk::Device, queue: &mut vk::Queue,
+    cmd_pool: &mut vk::CommandPoolLifetime, src: &[u8], dst: &vk::Buffer,
+    dst_stage_mask: vk::PipelineStageFlags, dst_access_mask: vk::AccessFlags,
 ) -> anyhow::Result<()> {
     let staging_buffer = vk::BufferWithoutMemory::new(
         device,
@@ -143,7 +143,7 @@ fn upload_data(
         vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     );
-    let memory = vk::DeviceMemory::new(device, mem_size, host_mem)?;
+    let memory = vk::DeviceMemoryLifetime::new(device, mem_size, host_mem)?;
     let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
     let mut memory = memory.map(0, src.len())?;
     memory.write_at(0).write_all(src)?;
@@ -162,15 +162,13 @@ fn upload_data(
         dst_access_mask,
     );
     let mut transfer = transfer.end()?;
-    queue.scope(|s| {
-        s.submit([vk::Submit::Command(&mut transfer)]);
-    });
+    queue.scope(|s| s.submit([vk::Submit::Command(&mut transfer)]));
     Ok(())
 }
 
 fn upload_image(
     device: &vk::Device, queue: &mut vk::Queue, image: &vk::Image,
-    cmd_pool: &mut vk::CommandPool,
+    cmd_pool: &mut vk::CommandPoolLifetime,
 ) -> anyhow::Result<()> {
     let image_file = std::fs::File::open("assets/texture.jpg")?;
     let mut image_data =
@@ -191,7 +189,7 @@ fn upload_image(
         vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     );
-    let memory = vk::DeviceMemory::new(&device, mem_size, host_mem)?;
+    let memory = vk::DeviceMemoryLifetime::new(&device, mem_size, host_mem)?;
     let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
     let mut memory = memory.map(0, mem_size as usize)?;
     let mut writer = memory.write_at(0);
@@ -232,7 +230,6 @@ fn upload_image(
     );
     let mut transfer = transfer.end()?;
     queue.scope(|s| s.submit([vk::Submit::Command(&mut transfer)]));
-
     Ok(())
 }
 
@@ -319,7 +316,7 @@ fn main() -> anyhow::Result<()> {
     // )?);
     let mut swapchain = todo!();
 
-    let mut cmd_pool = vk::CommandPool::new(&device, queue_family)?;
+    let mut cmd_pool = vk::CommandPoolLifetime::new(&device, queue_family)?;
 
     let vertex_size = std::mem::size_of_val(&VERTEX_DATA);
     let index_size = std::mem::size_of_val(&INDEX_DATA);
@@ -376,7 +373,7 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         },
     )?;
-    let uniform_memory = vk::DeviceMemory::new(
+    let uniform_memory = vk::DeviceMemoryLifetime::new(
         &device,
         uniform_buffer.memory_requirements().size,
         memory_type(

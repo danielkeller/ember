@@ -230,7 +230,7 @@ mod test {
     #[test]
     fn cmd_state() -> vk::Result<()> {
         let (dev, mut q) = crate::test_device()?;
-        let mut pool = vk::CommandPool::new(&dev, 0)?;
+        let mut pool = vk::CommandPoolLifetime::new(&dev, 0)?;
         assert!(pool.reset(Default::default()).is_ok());
         let mut buf = pool.begin().end()?;
 
@@ -340,8 +340,8 @@ mod test {
         let mut q1 = qs.remove(0).remove(0);
         let mut q2 = qs.remove(0).remove(0);
 
-        let mut pool1 = vk::CommandPool::new(&dev, 0)?;
-        let mut pool2 = vk::CommandPool::new(&dev, 0)?;
+        let mut pool1 = vk::CommandPoolLifetime::new(&dev, 0)?;
+        let mut pool2 = vk::CommandPoolLifetime::new(&dev, 0)?;
         let mut buf1 = pool1.begin().end()?;
         let mut buf2 = pool2.begin().end()?;
 

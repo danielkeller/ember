@@ -42,7 +42,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         unsafe {
             (self.device.fun.cmd_fill_buffer)(
                 self.buffer.handle_mut(),
-                dst.borrow(),
+                dst.handle(),
                 offset,
                 size,
                 data,
@@ -68,8 +68,8 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         unsafe {
             (self.device.fun.cmd_copy_buffer)(
                 self.buffer.handle_mut(),
-                src.borrow(),
-                dst.borrow(),
+                src.handle(),
+                dst.handle(),
                 regions.len() as u32,
                 Array::from_slice(regions).ok_or(Error::InvalidArgument)?,
             );
@@ -105,7 +105,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         unsafe {
             (self.device.fun.cmd_copy_buffer_to_image)(
                 self.buffer.handle_mut(),
-                src.borrow(),
+                src.handle(),
                 dst.borrow(),
                 dst_layout,
                 regions.len() as u32,

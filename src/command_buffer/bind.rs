@@ -114,7 +114,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 return Err(Error::InvalidArgument);
             }
         }
-        let vkbuffers = &buffers.map(|b| b.borrow());
+        let vkbuffers = &buffers.map(|b| b.handle());
 
         unsafe {
             (self.device.fun.cmd_bind_vertex_buffers)(
@@ -140,7 +140,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         unsafe {
             (self.device.fun.cmd_bind_index_buffer)(
                 self.buffer.handle_mut(),
-                buffer.borrow(),
+                buffer.handle(),
                 offset,
                 index_type,
             )
@@ -370,7 +370,7 @@ mod test {
             },
         )?
         .allocate_memory(0)?;
-        let mut pool = vk::CommandPool::new(&dev, 0)?;
+        let mut pool = vk::CommandPoolLifetime::new(&dev, 0)?;
         let mut rec = pool.begin();
         assert!(rec.fill_buffer(&buf, 100, Some(1024), 42).is_err());
         assert!(rec.fill_buffer(&buf, 2000, None, 42).is_err());
@@ -467,7 +467,7 @@ mod test {
     #[test]
     fn descriptor_set_typecheck() -> vk::Result<()> {
         let (dev, _) = crate::test_device()?;
-        let mut cmd_pool = vk::CommandPool::new(&dev, 0)?;
+        let mut cmd_pool = vk::CommandPoolLifetime::new(&dev, 0)?;
 
         let ds_layout1 = vk::DescriptorSetLayout::new(
             &dev,
@@ -716,7 +716,7 @@ mod test {
                 },
             ],
         )?;
-        let mut cmd_pool = vk::CommandPool::new(&dev, 0)?;
+        let mut cmd_pool = vk::CommandPoolLifetime::new(&dev, 0)?;
         let buf = cmd_pool.allocate()?;
         let mut rec = cmd_pool.begin(buf)?;
 

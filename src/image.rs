@@ -7,9 +7,8 @@
 // except according to those terms.
 
 use crate::enums::*;
-use crate::error::{Error, ErrorAndSelf, Result, ResultAndSelf};
-use crate::memory::{DeviceMemory, MemoryLifetime};
-use crate::subobject::Subobject;
+use crate::error::{Error, Result};
+use crate::memory::DeviceMemory;
 use crate::types::*;
 use crate::vk::Device;
 
@@ -25,7 +24,7 @@ pub struct ImageWithoutMemory<'d> {
     mip_levels: u32,
     array_layers: u32,
     usage: ImageUsageFlags,
-    res: ImageOwner,
+    owned: bool,
     device: &'d Device<'d>,
 }
 
@@ -33,28 +32,13 @@ pub struct ImageWithoutMemory<'d> {
 #[doc = crate::spec_link!("image", "12", "resources-images")]
 /// with memory attached to it.
 #[derive(Debug)]
-pub struct Image<'d> {
-    inner: ImageWithoutMemory<'d>,
-    // _memory: Option<Subobject<MemoryLifetime<'d>>>,
-}
+pub struct Image<'a>(ImageWithoutMemory<'a>);
 
-#[derive(Debug)]
-enum ImageOwner {
-    // Swapchain(Subobject<SwapchainImages<'d>>),
-    Application,
-}
+impl<'a> std::ops::Deref for Image<'a> {
+    type Target = ImageWithoutMemory<'a>;
 
-impl PartialEq for Image<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.inner.device == other.inner.device
-            && self.inner.handle == other.inner.handle
-    }
-}
-impl Eq for Image<'_> {}
-impl std::hash::Hash for Image<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.inner.device.hash(state);
-        self.inner.handle.hash(state);
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -93,62 +77,21 @@ impl<'d> ImageWithoutMemory<'d> {
             mip_levels: info.mip_levels,
             array_layers: info.array_layers,
             usage: info.usage,
-            res: ImageOwner::Application,
+            owned: true,
             device,
         })
     }
-}
-
-impl<'d> Image<'d> {
-    /// Note that it is an error to bind a storage image to
-    /// host-visible memory when robust buffer access is not enabled.
-    #[doc = crate::man_link!(vkBindImageMemory)]
-    pub fn new(
-        image: ImageWithoutMemory<'d>, memory: &DeviceMemory<'d>, offset: u64,
-    ) -> ResultAndSelf<Self, ImageWithoutMemory<'d>> {
-        assert_eq!(memory.device(), image.device);
-        if !memory.check(offset, image.memory_requirements()) {
-            return Err(ErrorAndSelf(Error::InvalidArgument, image));
-        }
-        Self::bind_image_impl(image, memory, offset)
-    }
-
-    fn bind_image_impl(
-        mut inner: ImageWithoutMemory<'d>, memory: &DeviceMemory<'d>,
-        offset: u64,
-    ) -> ResultAndSelf<Self, ImageWithoutMemory<'d>> {
-        if let Err(err) = unsafe {
-            (memory.device().fun.bind_image_memory)(
-                memory.device().handle(),
-                inner.borrow_mut(),
-                memory.handle(),
-                offset,
-            )
-        } {
-            return Err(ErrorAndSelf(err.into(), inner));
-        }
-        Ok(Self { inner })
-    }
-}
-
-impl Drop for ImageWithoutMemory<'_> {
-    fn drop(&mut self) {
-        if let ImageOwner::Application = &self.res {
-            unsafe {
-                (self.device.fun.destroy_image)(
-                    self.device.handle(),
-                    self.handle.borrow_mut(),
-                    None,
-                )
-            }
-        }
-    }
-}
-
-impl<'d> ImageWithoutMemory<'d> {
     /// Borrows the inner Vulkan handle.
-    pub fn borrow_mut(&mut self) -> Mut<VkImage> {
+    pub fn handle(&self) -> Ref<VkImage> {
+        self.handle.borrow()
+    }
+    /// Borrows the inner Vulkan handle.
+    pub fn handle_mut(&mut self) -> Mut<VkImage> {
         self.handle.borrow_mut()
+    }
+    /// Returns the associated device.
+    pub fn device(&self) -> &Device {
+        self.device
     }
     /// If [`ImageCreateInfo::usage`] includes a storage image usage type and
     /// the robust buffer access feature was not enabled at device creation, any
@@ -175,67 +118,17 @@ impl<'d> ImageWithoutMemory<'d> {
         }
         result
     }
-    /// Allocate a single piece of memory for the image and bind it.
-    pub fn allocate_memory(
-        self, memory_type_index: u32,
-    ) -> ResultAndSelf<Image<'d>, Self> {
-        let mem_req = self.memory_requirements();
-        if (1 << memory_type_index) & mem_req.memory_type_bits == 0 {
-            return Err(ErrorAndSelf(Error::InvalidArgument, self));
-        }
-        let memory = match DeviceMemory::new(
-            &self.device,
-            mem_req.size,
-            memory_type_index,
-        ) {
-            Ok(memory) => memory,
-            Err(err) => return Err(ErrorAndSelf(err, self)),
-        };
-        // Don't need to check requirements
-        Image::bind_image_impl(self, &memory, 0)
-    }
-}
-
-impl<'d> Image<'d> {
-    // pub(crate) fn new_from(
-    //     handle: Handle<VkImage>, device: &'d Device,
-    //     res: Subobject<SwapchainImages<'d>>, format: Format, extent: Extent3D,
-    //     array_layers: u32, usage: ImageUsageFlags,
-    // ) -> Self {
-    //     Self {
-    //         inner: ImageWithoutMemory {
-    //             handle,
-    //             device,
-    //             res: ImageOwner::Swapchain(res),
-    //             format,
-    //             extent,
-    //             array_layers,
-    //             usage,
-    //             mip_levels: 1,
-    //         },
-    //         _memory: None,
-    //     }
-    // }
-
-    /// Borrows the inner Vulkan handle.
-    pub fn borrow(&self) -> Ref<VkImage> {
-        self.inner.handle.borrow()
-    }
-    /// Returns the associated device.
-    pub fn device(&self) -> &Device {
-        self.inner.device
-    }
     /// Returns the allowed image usages
     pub fn usage(&self) -> ImageUsageFlags {
-        self.inner.usage
+        self.usage
     }
     /// Returns the format of the image.
     pub fn format(&self) -> Format {
-        self.inner.format
+        self.format
     }
     /// Returns the extent of the image.
     pub fn extent(&self, mip_level: u32) -> Extent3D {
-        let ex = self.inner.extent;
+        let ex = self.extent;
         Extent3D {
             width: ex.width >> mip_level,
             height: ex.height >> mip_level,
@@ -246,8 +139,8 @@ impl<'d> Image<'d> {
     pub fn array_bounds_check(
         &self, base_array_layer: u32, layer_count: u32,
     ) -> bool {
-        self.inner.array_layers >= base_array_layer
-            && self.inner.array_layers - base_array_layer >= layer_count
+        self.array_layers >= base_array_layer
+            && self.array_layers - base_array_layer >= layer_count
     }
     /// Returns true if the given point is within the image at the given mip
     /// level.
@@ -255,7 +148,7 @@ impl<'d> Image<'d> {
         &self, mip_level: u32, offset: Offset3D,
     ) -> bool {
         let ex = self.extent(mip_level);
-        mip_level < self.inner.mip_levels
+        mip_level < self.mip_levels
             && (offset.x >= 0 && offset.y >= 0 && offset.z >= 0)
             && ex.width >= offset.x as u32
             && ex.height >= offset.y as u32
@@ -274,26 +167,69 @@ impl<'d> Image<'d> {
     }
 }
 
+impl Drop for ImageWithoutMemory<'_> {
+    fn drop(&mut self) {
+        if self.owned {
+            unsafe {
+                (self.device.fun.destroy_image)(
+                    self.device.handle(),
+                    self.handle.borrow_mut(),
+                    None,
+                )
+            }
+        }
+    }
+}
+
+impl<'a> Image<'a> {
+    /// Note that it is an error to bind a storage image to host-visible memory
+    /// when robust buffer access is not enabled.
+    #[doc = crate::man_link!(vkBindImageMemory)]
+    pub fn new(
+        mut image: ImageWithoutMemory<'a>, memory: &'a DeviceMemory<'a>,
+        offset: u64,
+    ) -> Result<Self> {
+        assert_eq!(memory.device(), image.device);
+        if !memory.check(offset, image.memory_requirements()) {
+            return Err(Error::InvalidArgument);
+        }
+
+        unsafe {
+            (memory.device().fun.bind_image_memory)(
+                memory.device().handle(),
+                image.handle_mut(),
+                memory.handle(),
+                offset,
+            )?;
+        }
+        Ok(Self(image))
+    }
+
+    /// Create an unowned image, for use by the swapchain. The caller must give
+    /// the result an appropriate lifetime.
+    pub(crate) unsafe fn new_from(
+        handle: Handle<VkImage>, device: &'a Device, format: Format,
+        extent: Extent3D, array_layers: u32, usage: ImageUsageFlags,
+    ) -> Self {
+        Self(ImageWithoutMemory {
+            handle,
+            device,
+            format,
+            extent,
+            array_layers,
+            usage,
+            mip_levels: 1,
+            owned: false,
+        })
+    }
+}
+
 /// An
 #[doc = crate::spec_link!("image view", "12", "resources-image-views")]
 #[derive(Debug)]
 pub struct ImageView<'a> {
     handle: Handle<VkImageView>,
     image: &'a Image<'a>,
-}
-
-impl PartialEq for ImageView<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.image.inner.device == other.image.inner.device
-            && self.handle == other.handle
-    }
-}
-impl Eq for ImageView<'_> {}
-impl std::hash::Hash for ImageView<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.image.inner.device.hash(state);
-        self.handle.hash(state);
-    }
 }
 
 #[doc = crate::man_link!(VkImageViewCreateInfo)]
@@ -315,7 +251,7 @@ impl<'a> ImageView<'a> {
             stype: Default::default(),
             next: Default::default(),
             flags: info.flags,
-            image: image.borrow(),
+            image: image.handle(),
             view_type: info.view_type,
             format: info.format,
             components: info.components,
@@ -323,8 +259,8 @@ impl<'a> ImageView<'a> {
         };
         let mut handle = None;
         unsafe {
-            (image.inner.device.fun.create_image_view)(
-                image.inner.device.handle(),
+            (image.device.fun.create_image_view)(
+                image.device.handle(),
                 &vk_info,
                 None,
                 &mut handle,

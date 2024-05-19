@@ -24,7 +24,7 @@ pub mod barrier;
 mod bind;
 mod draw;
 
-// TODO: CommandPoolSet, with reset(&mut self) and record(&self) -> RecordingSession
+// TODO: CommandPoolSet, with reset(&mut self) and record(&self) -> CommandPool
 
 #[derive(Debug)]
 struct PoolInner {
@@ -34,16 +34,18 @@ struct PoolInner {
     scratch: Exclusive<bumpalo::Bump>,
 }
 
-/// A command pool.
+/// An object which owns a [CommandPool].
 #[derive(Debug)]
-pub struct CommandPool<'d> {
+pub struct CommandPoolLifetime<'d> {
     inner: PoolInner,
     device: &'d Device<'d>,
 }
 
-// TODO: Name
+/// A
+#[doc = crate::spec_link!("command pool", "6", "commandbuffers-pools")]
+/// , which can be recorded on.
 #[derive(Debug)]
-pub struct RecordingSession<'pool> {
+pub struct CommandPool<'pool> {
     // Split up to keep 'pool covariant
     inner: &'pool mut PoolInner,
     device: &'pool Device<'pool>,
@@ -110,7 +112,7 @@ pub struct SecondaryCommandRecording<'rec, 'pool> {
     subpass: u32,
 }
 
-impl<'d> CommandPool<'d> {
+impl<'d> CommandPoolLifetime<'d> {
     /// Create a command pool. The pool is not transient, not protected, and its
     /// buffers cannot be individually reset.
     #[doc = crate::man_link!(vkCreateCommandPool)]
@@ -132,7 +134,7 @@ impl<'d> CommandPool<'d> {
         }
         let handle = handle.unwrap();
 
-        Ok(CommandPool {
+        Ok(CommandPoolLifetime {
             inner: PoolInner {
                 handle,
                 buffers: Default::default(),
@@ -144,7 +146,7 @@ impl<'d> CommandPool<'d> {
     }
 }
 
-impl Drop for CommandPool<'_> {
+impl Drop for CommandPoolLifetime<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_command_pool)(
@@ -181,7 +183,7 @@ impl PoolInner {
     }
 }
 
-impl CommandPool<'_> {
+impl CommandPoolLifetime<'_> {
     /// Borrows the inner Vulkan handle.
     pub fn handle_mut(&mut self) -> Mut<VkCommandPool> {
         self.inner.handle.borrow_mut()
@@ -196,10 +198,10 @@ impl CommandPool<'_> {
     }
 }
 
-impl<'d> CommandPool<'d> {
+impl<'d> CommandPoolLifetime<'d> {
     /// Resets the pool and adds all command buffers to the free list.
     #[doc = crate::man_link!(vkResetCommandPool)]
-    pub fn reset<'pool>(&'pool mut self) -> Result<RecordingSession<'pool>> {
+    pub fn reset<'pool>(&'pool mut self) -> Result<CommandPool<'pool>> {
         unsafe {
             (self.device.fun.reset_command_pool)(
                 self.device.handle(),
@@ -210,11 +212,11 @@ impl<'d> CommandPool<'d> {
         self.inner.free_buffers.clear();
         self.inner.free_buffers.extend(0..self.len());
         self.inner.scratch.get_mut().reset();
-        Ok(RecordingSession { inner: &mut self.inner, device: self.device })
+        Ok(CommandPool { inner: &mut self.inner, device: self.device })
     }
 }
 
-impl<'pool> RecordingSession<'pool> {
+impl<'pool> CommandPool<'pool> {
     /// Begin a command buffer, allocating a new one if one is not available on the free list. Command buffers have ONE_TIME_SUBMIT set.
     #[doc = crate::man_link!(vkAllocateCommandBuffers)]
     #[doc = crate::man_link!(vkBeginCommandBuffer)]
@@ -561,8 +563,8 @@ mod test {
             vec![],
             Default::default(),
         )?;
-        let mut pool1 = vk::CommandPool::new(&dev, 0)?;
-        let mut pool2 = vk::CommandPool::new(&dev, 0)?;
+        let mut pool1 = vk::CommandPoolLifetime::new(&dev, 0)?;
+        let mut pool2 = vk::CommandPoolLifetime::new(&dev, 0)?;
 
         let sec = pool2.allocate_secondary()?;
         let mut sec = pool2.begin_secondary(sec, &pass, 0)?.end()?;
@@ -619,7 +621,7 @@ mod test {
             Default::default(),
         )?;
 
-        let mut pool = vk::CommandPool::new(&dev, 0)?;
+        let mut pool = vk::CommandPoolLifetime::new(&dev, 0)?;
 
         let buf = pool.allocate()?;
         let rec = pool.begin(buf)?;

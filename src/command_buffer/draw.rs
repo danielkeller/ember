@@ -263,7 +263,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         unsafe {
             (self.device.fun.cmd_draw_indirect)(
                 self.buffer.handle_mut(),
-                buffer.borrow(),
+                buffer.handle(),
                 offset,
                 draw_count,
                 stride,
@@ -300,7 +300,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         unsafe {
             (self.device.fun.cmd_draw_indexed_indirect)(
                 self.buffer.handle_mut(),
-                buffer.borrow(),
+                buffer.handle(),
                 offset,
                 draw_count,
                 stride,
@@ -334,7 +334,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         unsafe {
             (self.device.fun.cmd_dispatch_indirect)(
                 self.buffer.handle_mut(),
-                buffer.borrow(),
+                buffer.handle(),
                 offset,
             );
         }

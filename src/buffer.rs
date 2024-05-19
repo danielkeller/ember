@@ -7,9 +7,8 @@
 // except according to those terms.
 
 use crate::enums::*;
-use crate::error::{Error, ErrorAndSelf, Result, ResultAndSelf};
-use crate::memory::{DeviceMemory, MemoryLifetime};
-use crate::subobject::Subobject;
+use crate::error::{Error, Result};
+use crate::memory::DeviceMemory;
 use crate::types::*;
 use crate::vk::Device;
 
@@ -27,11 +26,17 @@ pub struct BufferWithoutMemory<'d> {
 #[doc = crate::spec_link!("buffer", "12", "resources-buffers")]
 /// with memory attached to it.
 #[derive(Debug)]
-pub struct Buffer<'a> {
-    inner: BufferWithoutMemory<'a>,
-    // _memory: Subobject<MemoryLifetime<'a>>,
+pub struct Buffer<'a>(BufferWithoutMemory<'a>);
+
+impl<'a> std::ops::Deref for Buffer<'a> {
+    type Target = BufferWithoutMemory<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl<'d> BufferWithoutMemory<'d> {
     #[doc = crate::man_link!(vkCreateBuffer)]
     pub fn new(
@@ -53,63 +58,22 @@ impl<'d> BufferWithoutMemory<'d> {
             device,
         })
     }
-}
-impl<'d> Buffer<'d> {
-    // TODO: Bulk bind
-    /// Note that it is an error to bind a storage, uniform, vertex, or index
-    /// buffer to host-visible memory when robust buffer access is not enabled.
-    #[doc = crate::man_link!(vkBindBufferMemory)]
-    pub fn new(
-        buffer: BufferWithoutMemory<'d>, memory: &DeviceMemory<'d>, offset: u64,
-    ) -> Result<Self> {
-        assert_eq!(memory.device(), buffer.device);
-        if !memory.check(offset, buffer.memory_requirements()) {
-            return Err(Error::InvalidArgument);
-        }
-        Self::bind_buffer_impl(buffer, memory, offset)
-    }
 
-    fn bind_buffer_impl(
-        mut inner: BufferWithoutMemory<'d>, memory: &DeviceMemory<'d>,
-        offset: u64,
-    ) -> Result<Self> {
-        unsafe {
-            (memory.device().fun.bind_buffer_memory)(
-                memory.device().handle(),
-                inner.handle.borrow_mut(),
-                memory.handle(),
-                offset,
-            )?;
-        }
-        Ok(Buffer { inner })
-    }
-}
-
-impl Drop for BufferWithoutMemory<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            (self.device.fun.destroy_buffer)(
-                self.device.handle(),
-                self.handle.borrow_mut(),
-                None,
-            )
-        }
-    }
-}
-
-#[allow(clippy::len_without_is_empty)]
-impl Buffer<'_> {
     /// Borrows the inner Vulkan handle.
-    pub fn borrow(&self) -> Ref<VkBuffer> {
-        self.inner.handle.borrow()
+    pub fn handle(&self) -> Ref<VkBuffer> {
+        self.handle.borrow()
+    }
+    /// Borrows the inner Vulkan handle.
+    pub fn handle_mut(&mut self) -> Mut<VkBuffer> {
+        self.handle.borrow_mut()
     }
     /// Returns the associated device.
     pub fn device(&self) -> &Device {
-        self.inner.device
+        self.device
     }
     /// Returns the buffer length in bytes.
     pub fn len(&self) -> u64 {
-        self.inner.len
+        self.len
     }
     /// Returns true if the offset and length are within the buffer's bounds.
     pub fn bounds_check(&self, offset: u64, len: u64) -> bool {
@@ -117,14 +81,7 @@ impl Buffer<'_> {
     }
     /// Returns the allowed buffer usages
     pub fn usage(&self) -> BufferUsageFlags {
-        self.inner.usage
-    }
-}
-
-impl<'d> BufferWithoutMemory<'d> {
-    /// Borrows the inner Vulkan handle.
-    pub fn borrow_mut(&mut self) -> Mut<VkBuffer> {
-        self.handle.borrow_mut()
+        self.usage
     }
     /// If [`BufferCreateInfo::usage`] includes an abritrarily indexable buffer
     /// usage type (uniform, storage, vertex, or index) and the robust buffer
@@ -152,18 +109,58 @@ impl<'d> BufferWithoutMemory<'d> {
         }
         result
     }
-    /// Allocate a single piece of memory for the buffer and bind it. Note that
-    /// it is an error to bind a uniform, storage, vertex, or index buffer to
-    /// host-visible memory when robust buffer access is not enabled.
-    pub fn allocate_memory(self, memory_type_index: u32) -> Result<Buffer<'d>> {
-        let mem_req = self.memory_requirements();
-        if (1 << memory_type_index) & mem_req.memory_type_bits == 0 {
+}
+
+impl Drop for BufferWithoutMemory<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            (self.device.fun.destroy_buffer)(
+                self.device.handle(),
+                self.handle.borrow_mut(),
+                None,
+            )
+        }
+    }
+}
+
+impl<'a> Buffer<'a> {
+    // TODO: Bulk bind
+    /// Note that it is an error to bind a storage, uniform, vertex, or index
+    /// buffer to host-visible memory when robust buffer access is not enabled.
+    #[doc = crate::man_link!(vkBindBufferMemory)]
+    pub fn new(
+        mut buffer: BufferWithoutMemory<'a>, memory: &'a DeviceMemory<'a>,
+        offset: u64,
+    ) -> Result<Self> {
+        assert_eq!(memory.device(), buffer.device);
+        if !memory.check(offset, buffer.memory_requirements()) {
             return Err(Error::InvalidArgument);
         }
-        let memory =
-            DeviceMemory::new(self.device, mem_req.size, memory_type_index)?;
-        // Don't need to check requirements
-        Buffer::bind_buffer_impl(self, &memory, 0)
+
+        unsafe {
+            (memory.device().fun.bind_buffer_memory)(
+                memory.device().handle(),
+                buffer.handle.borrow_mut(),
+                memory.handle(),
+                offset,
+            )?;
+        }
+        Ok(Buffer(buffer))
+    }
+
+    fn bind_buffer_impl(
+        mut inner: BufferWithoutMemory<'a>, memory: &'a DeviceMemory<'a>,
+        offset: u64,
+    ) -> Result<Self> {
+        unsafe {
+            (memory.device().fun.bind_buffer_memory)(
+                memory.device().handle(),
+                inner.handle.borrow_mut(),
+                memory.handle(),
+                offset,
+            )?;
+        }
+        Ok(Buffer(inner))
     }
 }
 
