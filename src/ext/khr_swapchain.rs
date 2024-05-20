@@ -87,20 +87,22 @@ impl<'a> SwapchainKHR<'a> {
         Self::new_impl(device, surface, SwapchainKHRFn::new(device), None, info)
     }
 
-    /// The old swapchain is destroyed after the new one is created.
+    /// The current swapchain is destroyed after the new one is created.
     ///
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
     pub fn recreate(
-        device: &'a Device, mut old_swapchain: SwapchainKHR<'a>,
-        info: SwapchainCreateInfoKHR,
-    ) -> Result<Self> {
-        Self::new_impl(
+        &mut self, device: &'a Device, info: SwapchainCreateInfoKHR,
+    ) -> Result<()> {
+        // I think this puts 'self' in a bad state if this fails...
+        let mut new = Self::new_impl(
             device,
-            old_swapchain.surface.take().unwrap(),
+            self.surface.take().unwrap(),
             SwapchainKHRFn::new(device),
-            Some(old_swapchain.handle.borrow_mut()),
+            Some(self.handle.borrow_mut()),
             info,
-        )
+        )?;
+        std::mem::swap(self, &mut new);
+        Ok(())
     }
 
     fn new_impl(
@@ -160,14 +162,14 @@ impl<'a> SwapchainKHR<'a> {
             images
                 .into_iter()
                 .map(|handle| {
-                    (Image::new_from(
+                    Image::new_from(
                         handle,
-                        device.clone(),
+                        device,
                         info.image_format,
                         info.image_extent.into(),
                         info.image_array_layers,
                         info.image_usage,
-                    ))
+                    )
                 })
                 .collect()
         };
@@ -175,7 +177,7 @@ impl<'a> SwapchainKHR<'a> {
         Ok(Self { device, handle, fun, images, surface: Some(surface) })
     }
 
-    fn images(&mut self) -> SwapchainImages {
+    pub fn images(&mut self) -> SwapchainImages {
         SwapchainImages {
             handle: self.handle.borrow_mut(),
             fun: &self.fun,

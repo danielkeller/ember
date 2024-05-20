@@ -143,9 +143,9 @@ fn upload_data(
         vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     );
-    let memory = vk::DeviceMemoryLifetime::new(device, mem_size, host_mem)?;
-    let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
-    let mut memory = memory.map(0, src.len())?;
+    let mut mmemory = vk::DeviceMemory::new(device, mem_size, host_mem)?;
+    let mut memory = mmemory.map(0, src.len())?;
+    let staging_buffer = vk::Buffer::new(staging_buffer, memory.memory(), 0)?;
     memory.write_at(0).write_all(src)?;
 
     let mut recording_session = cmd_pool.reset()?;
@@ -189,9 +189,9 @@ fn upload_image(
         vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     );
-    let memory = vk::DeviceMemoryLifetime::new(&device, mem_size, host_mem)?;
-    let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
+    let mut memory = vk::DeviceMemory::new(&device, mem_size, host_mem)?;
     let mut memory = memory.map(0, mem_size as usize)?;
+    let staging_buffer = vk::Buffer::new(staging_buffer, memory.memory(), 0)?;
     let mut writer = memory.write_at(0);
     for src in image_data.chunks_exact(3) {
         writer.write_all(src)?;
@@ -277,7 +277,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let device_extensions = required_device_extensions(&phy)?;
-    let device = vk::Device::new(
+    let device = &vk::Device::new(
         &phy,
         &vk::DeviceCreateInfo {
             queue_create_infos: vk::slice(&[vk::DeviceQueueCreateInfo {
@@ -296,38 +296,38 @@ fn main() -> anyhow::Result<()> {
     )?;
     let mut queue = device.take_queues()[0][0];
 
-    let mut acquire_sem = vk::Semaphore::new(&device)?;
-    let mut fence = Some(vk::Fence::new(&device)?);
+    let mut acquire_sem = vk::Semaphore::new(device)?;
+    let mut fence = Some(vk::Fence::new(device)?);
 
     let window_size = window.inner_size();
     let mut swapchain_size =
         vk::Extent2D { width: window_size.width, height: window_size.height };
-    // let mut swapchain = Some(vk::ext::SwapchainKHR::new(
-    //     &device,
-    //     vk::CreateSwapchainFrom::Surface(surf),
-    //     vk::SwapchainCreateInfoKHR {
-    //         min_image_count: 3,
-    //         image_format: vk::Format::B8G8R8A8_SRGB,
-    //         image_extent: swapchain_size,
-    //         image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
-    //             | vk::ImageUsageFlags::TRANSFER_DST,
-    //         ..Default::default()
-    //     },
-    // )?);
-    let mut swapchain = todo!();
+    let mut swapchain = vk::ext::SwapchainKHR::new(
+        device,
+        &mut surf,
+        vk::SwapchainCreateInfoKHR {
+            min_image_count: 3,
+            image_format: vk::Format::B8G8R8A8_SRGB,
+            image_extent: swapchain_size,
+            image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::TRANSFER_DST,
+            ..Default::default()
+        },
+    )?;
+    let mut swapchain_images = swapchain.images();
 
-    let mut cmd_pool = vk::CommandPoolLifetime::new(&device, queue_family)?;
+    let mut cmd_pool = vk::CommandPoolLifetime::new(device, queue_family)?;
 
     let vertex_size = std::mem::size_of_val(&VERTEX_DATA);
     let index_size = std::mem::size_of_val(&INDEX_DATA);
 
     let device_mem = memory_type(
-        &device.physical_device(),
+        device.physical_device(),
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     );
 
     let vertex_buffer = vk::BufferWithoutMemory::new(
-        &device,
+        device,
         &vk::BufferCreateInfo {
             size: vertex_size as u64,
             usage: vk::BufferUsageFlags::VERTEX_BUFFER
@@ -335,9 +335,29 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         },
     )?;
-    let vertex_buffer = vertex_buffer.allocate_memory(device_mem)?;
+    let index_buffer = vk::BufferWithoutMemory::new(
+        device,
+        &vk::BufferCreateInfo {
+            size: index_size as u64,
+            usage: vk::BufferUsageFlags::INDEX_BUFFER
+                | vk::BufferUsageFlags::TRANSFER_DST,
+            ..Default::default()
+        },
+    )?;
+    let vert_req = vertex_buffer.memory_requirements();
+    let ind_req = index_buffer.memory_requirements();
+    assert_ne!(vert_req.memory_type_bits & (1 << device_mem), 0);
+    assert_ne!(ind_req.memory_type_bits & (1 << device_mem), 0);
+    let ind_start =
+        (vert_req.size + ind_req.alignment - 1) & !(ind_req.alignment - 1);
+    let memory =
+        &vk::DeviceMemory::new(device, ind_start + ind_req.size, device_mem)?;
+
+    let vertex_buffer = vk::Buffer::new(vertex_buffer, memory, 0)?;
+    let index_buffer = vk::Buffer::new(index_buffer, memory, ind_start)?;
+
     upload_data(
-        &device,
+        device,
         &mut queue,
         &mut cmd_pool,
         bytemuck::bytes_of(&VERTEX_DATA),
@@ -346,18 +366,8 @@ fn main() -> anyhow::Result<()> {
         vk::AccessFlags::VERTEX_ATTRIBUTE_READ,
     )?;
 
-    let index_buffer = vk::BufferWithoutMemory::new(
-        &device,
-        &vk::BufferCreateInfo {
-            size: index_size as u64,
-            usage: vk::BufferUsageFlags::INDEX_BUFFER
-                | vk::BufferUsageFlags::TRANSFER_DST,
-            ..Default::default()
-        },
-    )?;
-    let index_buffer = index_buffer.allocate_memory(device_mem)?;
     upload_data(
-        &device,
+        device,
         &mut queue,
         &mut cmd_pool,
         bytemuck::bytes_of(&INDEX_DATA),
@@ -366,28 +376,28 @@ fn main() -> anyhow::Result<()> {
         vk::AccessFlags::INDEX_READ,
     )?;
     let uniform_buffer = vk::BufferWithoutMemory::new(
-        &device,
+        device,
         &vk::BufferCreateInfo {
             size: size_of::<MVP>() as u64,
             usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
             ..Default::default()
         },
     )?;
-    let uniform_memory = vk::DeviceMemoryLifetime::new(
-        &device,
+    let mut uniform_memory = vk::DeviceMemory::new(
+        device,
         uniform_buffer.memory_requirements().size,
         memory_type(
-            &device.physical_device(),
+            device.physical_device(),
             vk::MemoryPropertyFlags::DEVICE_LOCAL
                 | vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
         ),
     )?;
-    let uniform_buffer = vk::Buffer::new(uniform_buffer, &uniform_memory, 0)?;
     let mut mapped = uniform_memory.map(0, size_of::<MVP>())?;
+    let uniform_buffer = vk::Buffer::new(uniform_buffer, mapped.memory(), 0)?;
 
     let image = vk::ImageWithoutMemory::new(
-        &device,
+        device,
         &vk::ImageCreateInfo {
             format: vk::Format::R8G8B8A8_SRGB,
             extent: vk::Extent3D { width: 512, height: 512, depth: 1 },
@@ -396,8 +406,12 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         },
     )?;
-    let image = image.allocate_memory(device_mem)?;
-    upload_image(&device, &mut queue, &image, &mut cmd_pool)?;
+    let image_reqs = image.memory_requirements();
+    assert_ne!(image_reqs.memory_type_bits & (1 << device_mem), 0);
+    let image_memory =
+        vk::DeviceMemory::new(device, image_reqs.size, device_mem)?;
+    let image = vk::Image::new(image, &image_memory, 0)?;
+    upload_image(device, &mut queue, &image, &mut cmd_pool)?;
     let image_view = vk::ImageView::new(
         &image,
         &vk::ImageViewCreateInfo {
@@ -407,7 +421,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     let render_pass = vk::RenderPass::new(
-        &device,
+        device,
         &vk::RenderPassCreateInfo {
             attachments: vk::slice(&[vk::AttachmentDescription {
                 format: vk::Format::B8G8R8A8_SRGB,
@@ -430,12 +444,12 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     let vertex_shader =
-        vk::ShaderModule::new(&device, shader!("triangle.vert"))?;
+        vk::ShaderModule::new(device, shader!("triangle.vert"))?;
     let fragment_shader =
-        vk::ShaderModule::new(&device, shader!("triangle.frag"))?;
+        vk::ShaderModule::new(device, shader!("triangle.frag"))?;
 
     let descriptor_set_layout = vk::DescriptorSetLayout::new(
-        &device,
+        device,
         vec![
             vk::DescriptorSetLayoutBinding {
                 descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
@@ -448,7 +462,7 @@ fn main() -> anyhow::Result<()> {
                 descriptor_count: 1,
                 stage_flags: vk::ShaderStageFlags::FRAGMENT,
                 immutable_samplers: vec![vk::Sampler::new(
-                    &device,
+                    device,
                     &Default::default(),
                 )?
                 .handle()],
@@ -456,7 +470,7 @@ fn main() -> anyhow::Result<()> {
         ],
     )?;
     let mut descriptor_pool = vk::DescriptorPool::new(
-        &device,
+        device,
         1,
         &[
             vk::DescriptorPoolSize {
@@ -472,7 +486,7 @@ fn main() -> anyhow::Result<()> {
     let mut desc_set =
         vk::DescriptorSet::new(&mut descriptor_pool, &descriptor_set_layout)?;
 
-    let mut update = vk::DescriptorSetUpdateBuilder::new(&device);
+    let mut update = vk::DescriptorSetUpdateBuilder::new(device);
     update
         .begin()
         .dst_set(&mut desc_set)
@@ -494,7 +508,7 @@ fn main() -> anyhow::Result<()> {
     let desc_set = Arc::new(desc_set);
 
     let pipeline_layout = vk::PipelineLayout::new(
-        &device,
+        device,
         Default::default(),
         vec![&descriptor_set_layout],
         vec![],
@@ -565,11 +579,8 @@ fn main() -> anyhow::Result<()> {
         if draw_size != swapchain_size {
             swapchain_size = draw_size;
             framebuffers.clear();
-            swapchain = Some(vk::ext::SwapchainKHR::new(
+            swapchain.recreate(
                 &device,
-                vk::CreateSwapchainFrom::OldSwapchain(
-                    swapchain.take().unwrap(),
-                ),
                 vk::SwapchainCreateInfoKHR {
                     min_image_count: 3,
                     image_format: vk::Format::B8G8R8A8_SRGB,
@@ -578,17 +589,16 @@ fn main() -> anyhow::Result<()> {
                         | vk::ImageUsageFlags::TRANSFER_DST,
                     ..Default::default()
                 },
-            )?);
+            )?;
+            swapchain_images = swapchain.images();
         }
 
-        let (img, _subopt) = swapchain
-            .as_mut()
-            .unwrap()
-            .acquire_next_image(&mut acquire_sem, u64::MAX)?;
+        let (img, _subopt) =
+            swapchain_images.acquire_next_image(&mut acquire_sem, u64::MAX)?;
 
         if !framebuffers.contains_key(&img) {
             let img_view = vk::ImageView::new(
-                &img,
+                &swapchain_images.images()[img],
                 &vk::ImageViewCreateInfo {
                     format: vk::Format::B8G8R8A8_SRGB,
                     ..Default::default()
@@ -621,6 +631,7 @@ fn main() -> anyhow::Result<()> {
             ),
         }))?;
 
+        let cmd_pool = cmd_pool.reset()?;
         let subpass = cmd_pool.allocate_secondary()?;
         let mut subpass = cmd_pool.begin_secondary(subpass, &render_pass, 0)?;
         subpass.set_viewport(&vk::Viewport {
@@ -671,9 +682,7 @@ fn main() -> anyhow::Result<()> {
                 vk::Submit::Signal(&present_sem),
             ]);
         });
-        swapchain.as_mut().unwrap().present(&mut queue, &img, present_sem)?;
-        drop(buf);
-        cmd_pool.reset()?;
+        swapchain_images.present(&mut queue, img, present_sem)?;
         Ok(())
     };
 

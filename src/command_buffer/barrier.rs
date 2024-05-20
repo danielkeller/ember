@@ -188,7 +188,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 new_layout,
                 src_queue_family_index: Default::default(),
                 dst_queue_family_index: Default::default(),
-                image: image.borrow(),
+                image: image.handle(),
                 subresource_range: Default::default(),
             };
             (self.device.fun.cmd_pipeline_barrier)(

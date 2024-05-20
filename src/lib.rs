@@ -224,9 +224,7 @@ pub mod vk {
     pub use crate::enums::*;
     pub use crate::error::{Error, ErrorAndSelf, Result, ResultAndSelf};
     pub use crate::ext;
-    // pub use crate::ext::khr_swapchain::{
-    //     CreateSwapchainFrom, SwapchainCreateInfoKHR,
-    // };
+    pub use crate::ext::khr_swapchain::SwapchainCreateInfoKHR;
     pub use crate::fence::{Fence, PendingFence};
     pub use crate::ffi::*;
     pub use crate::framebuffer::Framebuffer;
@@ -236,7 +234,7 @@ pub mod vk {
     pub use crate::instance::Instance;
     pub use crate::instance_extension_properties;
     pub use crate::memory::{
-        DeviceMemoryLifetime, MappedMemory, MemoryRead, MemoryWrite,
+        DeviceMemory, MappedMemory, MemoryRead, MemoryWrite,
     };
     pub use crate::physical_device::PhysicalDevice;
     pub use crate::pipeline::{

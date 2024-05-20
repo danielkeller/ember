@@ -101,8 +101,8 @@ impl Drop for DeviceMemory<'_> {
 }
 
 /// A [`DeviceMemory`] which has been mapped and can be written to
-pub struct MappedMemory<'d> {
-    memory: DeviceMemory<'d>,
+pub struct MappedMemory<'mem> {
+    memory: &'mem DeviceMemory<'mem>,
     size: usize,
     ptr: NonNull<u8>,
 }
@@ -127,7 +127,9 @@ impl<'d> DeviceMemory<'d> {
     /// Map the memory so it can be written to. Returns [`Error::OutOfBounds`] if
     /// `offset` and `size` are out of bounds. Currently, memory cannot be mapped
     /// or unmapped while buffers are bound to it.
-    pub fn map(mut self, offset: u64, size: usize) -> Result<MappedMemory<'d>> {
+    pub fn map<'mem>(
+        &'mem mut self, offset: u64, size: usize,
+    ) -> Result<MappedMemory<'mem>> {
         let (end, overflow) = offset.overflowing_add(size as u64);
         if overflow || end > self.allocation_size || size > isize::MAX as usize
         {
@@ -148,25 +150,25 @@ impl<'d> DeviceMemory<'d> {
     }
 }
 
-impl<'d> std::ops::Deref for MappedMemory<'d> {
-    type Target = DeviceMemory<'d>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.memory
+impl Drop for MappedMemory<'_> {
+    /// Unmaps the memory.
+    fn drop(&mut self) {
+        unsafe {
+            (self.memory.device.fun.unmap_memory)(
+                self.memory.device.handle(),
+                // Safety: 'memory' is mutably borrowed by the call to 'map()'
+                self.memory.handle.borrow_mut_unchecked(),
+            )
+        }
     }
 }
 
-impl<'d> MappedMemory<'d> {
-    /// Unmaps the memory.
-    pub fn unmap(mut self) -> DeviceMemory<'d> {
-        unsafe {
-            (self.device.fun.unmap_memory)(
-                self.device.handle(),
-                self.memory.handle.borrow_mut(),
-            )
-        }
+impl<'mem> MappedMemory<'mem> {
+    pub fn memory(&self) -> &'mem DeviceMemory<'mem> {
         self.memory
     }
+
+    pub fn unmap(self) {}
 
     /// Read the memory's contents. It may be garbage (although it won't be
     /// uninitialized). If `offset` is out of bounds, the result will be empty.

@@ -147,21 +147,6 @@ impl<'a> Buffer<'a> {
         }
         Ok(Buffer(buffer))
     }
-
-    fn bind_buffer_impl(
-        mut inner: BufferWithoutMemory<'a>, memory: &'a DeviceMemory<'a>,
-        offset: u64,
-    ) -> Result<Self> {
-        unsafe {
-            (memory.device().fun.bind_buffer_memory)(
-                memory.device().handle(),
-                inner.handle.borrow_mut(),
-                memory.handle(),
-                offset,
-            )?;
-        }
-        Ok(Buffer(inner))
-    }
 }
 
 #[cfg(test)]
