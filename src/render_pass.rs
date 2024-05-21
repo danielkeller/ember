@@ -16,7 +16,7 @@ use crate::types::*;
 #[derive(Debug)]
 pub struct RenderPass<'d> {
     handle: Handle<VkRenderPass>,
-    compat: RenderPassCompat,
+    pub(crate) compat: RenderPassCompat,
     pub(crate) device: &'d Device<'d>,
 }
 
@@ -76,13 +76,13 @@ impl Drop for RenderPass<'_> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 struct AttachmentRefCompat {
     format: Format,
     samples: SampleCount,
 }
 
-#[derive(Debug, Eq)]
+#[derive(Debug, Eq, Clone)]
 struct SubpassCompat {
     input_attachments: Vec<Option<AttachmentRefCompat>>,
     color_attachments: Vec<Option<AttachmentRefCompat>>,
@@ -91,8 +91,8 @@ struct SubpassCompat {
     preserve_attachments: Vec<Option<AttachmentRefCompat>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct RenderPassCompat {
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) struct RenderPassCompat {
     subpasses: Vec<SubpassCompat>,
     dependencies: Vec<SubpassDependency>,
 }

@@ -6,28 +6,29 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use crate::device::Device;
 use crate::enums::*;
 use crate::error::{Error, Result};
 use crate::image::ImageView;
-use crate::render_pass::RenderPass;
+use crate::render_pass::{RenderPass, RenderPassCompat};
 use crate::types::*;
 
 /// A
 #[doc = crate::spec_link!("framebuffer", "8", "_framebuffers")]
 #[derive(Debug)]
-pub struct Framebuffer<'d> {
+pub struct Framebuffer<'a> {
     handle: Handle<VkFramebuffer>,
-    _attachments: Vec<Arc<ImageView<'d>>>,
-    render_pass: Arc<RenderPass<'d>>,
+    render_pass_compat: RenderPassCompat,
+    device: &'a Device<'a>,
 }
 
-impl<'d> Framebuffer<'d> {
+impl<'a> Framebuffer<'a> {
     #[doc = crate::man_link!(vkCreateFrameuffer)]
     pub fn new(
-        render_pass: &Arc<RenderPass<'d>>, flags: FramebufferCreateFlags,
-        attachments: Vec<Arc<ImageView<'d>>>, size: Extent3D,
-    ) -> Result<Arc<Self>> {
-        for iv in &attachments {
+        render_pass: &RenderPass<'a>, flags: FramebufferCreateFlags,
+        attachments: &[&'a ImageView<'a>], size: Extent3D,
+    ) -> Result<Self> {
+        for iv in attachments {
             assert_eq!(iv.device(), render_pass.device());
         }
         let lim = render_pass.device().limits();
@@ -58,11 +59,11 @@ impl<'d> Framebuffer<'d> {
                 &mut handle,
             )?;
         }
-        Ok(Arc::new(Self {
+        Ok(Self {
             handle: handle.unwrap(),
-            _attachments: attachments,
-            render_pass: render_pass.clone(),
-        }))
+            render_pass_compat: render_pass.compat.clone(),
+            device: render_pass.device,
+        })
     }
 
     /// Borrows the inner Vulkan handle.
@@ -71,15 +72,15 @@ impl<'d> Framebuffer<'d> {
     }
     /// Returns true if this framebuffer is compatible with `pass`
     pub fn is_compatible_with(&self, pass: &RenderPass) -> bool {
-        self.render_pass.compatible(pass)
+        self.render_pass_compat == pass.compat
     }
 }
 
 impl Drop for Framebuffer<'_> {
     fn drop(&mut self) {
         unsafe {
-            (self.render_pass.device.fun.destroy_framebuffer)(
-                self.render_pass.device.handle(),
+            (self.device.fun.destroy_framebuffer)(
+                self.device.handle(),
                 self.handle.borrow_mut(),
                 None,
             )

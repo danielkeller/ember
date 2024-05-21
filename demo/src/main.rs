@@ -607,7 +607,7 @@ fn main() -> anyhow::Result<()> {
             let fb = vk::Framebuffer::new(
                 &render_pass,
                 Default::default(),
-                vec![&img_view],
+                &[&img_view],
                 swapchain_size.into(),
             )?;
             let sem = vk::Semaphore::new(&device)?;
