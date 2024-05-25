@@ -60,15 +60,16 @@ impl<'a> Default for SwapchainCreateInfoKHR<'a> {
 /// A
 #[doc = crate::spec_link!("swapchain", "33", "_wsi_swapchain")]
 #[derive(Debug)]
-pub struct SwapchainKHR<'a> {
+pub struct SwapchainKHR<'i, 'd> {
     handle: Handle<VkSwapchainKHR>,
     fun: SwapchainKHRFn,
-    images: Vec<Image<'a>>, // Warning: This lifetime is a lie...
+    images: Vec<Image<'d>>, // Warning: This lifetime is a lie...
     // Is it ok for 'a to be invariant?
-    surface: Option<&'a mut SurfaceKHR<'a>>,
-    device: &'a Device<'a>,
+    surface: Option<&'d mut SurfaceKHR<'i>>,
+    device: &'d Device<'d>,
 }
 
+// Maybe it would be more conveient to just make Swapchain !Sync.
 pub struct SwapchainImages<'chain> {
     handle: Mut<'chain, VkSwapchainKHR>,
     fun: &'chain SwapchainKHRFn,
@@ -76,12 +77,12 @@ pub struct SwapchainImages<'chain> {
     images: &'chain [Image<'chain>], // ... this is the real one.
 }
 
-impl<'a> SwapchainKHR<'a> {
+impl<'i, 'd> SwapchainKHR<'i, 'd> {
     /// Panics if the extension functions can't be loaded.
     ///
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
     pub fn new(
-        device: &'a Device, surface: &'a mut SurfaceKHR<'a>,
+        device: &'d Device, surface: &'d mut SurfaceKHR<'i>,
         info: SwapchainCreateInfoKHR,
     ) -> Result<Self> {
         Self::new_impl(device, surface, SwapchainKHRFn::new(device), None, info)
@@ -90,14 +91,12 @@ impl<'a> SwapchainKHR<'a> {
     /// The current swapchain is destroyed after the new one is created.
     ///
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
-    pub fn recreate(
-        &mut self, device: &'a Device, info: SwapchainCreateInfoKHR,
-    ) -> Result<()> {
+    pub fn recreate(&mut self, info: SwapchainCreateInfoKHR) -> Result<()> {
         // I think this puts 'self' in a bad state if this fails...
         let mut new = Self::new_impl(
-            device,
+            self.device,
             self.surface.take().unwrap(),
-            SwapchainKHRFn::new(device),
+            SwapchainKHRFn::new(self.device),
             Some(self.handle.borrow_mut()),
             info,
         )?;
@@ -106,7 +105,7 @@ impl<'a> SwapchainKHR<'a> {
     }
 
     fn new_impl(
-        device: &'a Device, surface: &'a mut SurfaceKHR<'a>,
+        device: &'d Device, surface: &'d mut SurfaceKHR<'i>,
         fun: SwapchainKHRFn, old_swapchain: Option<Mut<'_, VkSwapchainKHR>>,
         info: SwapchainCreateInfoKHR,
     ) -> Result<Self> {
@@ -187,7 +186,7 @@ impl<'a> SwapchainKHR<'a> {
     }
 }
 
-impl Drop for SwapchainKHR<'_> {
+impl Drop for SwapchainKHR<'_, '_> {
     fn drop(&mut self) {
         unsafe {
             (self.fun.destroy_swapchain_khr)(

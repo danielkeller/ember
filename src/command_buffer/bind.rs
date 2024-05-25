@@ -64,8 +64,8 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     /// usage flags don't include `VERTEX_BUFFER`.
     #[doc = crate::man_link!(vkCmdBindVertexBuffers)]
     pub fn bind_vertex_buffers<const N: usize>(
-        &mut self, first_binding: u32, buffers: &[&'pool Buffer; N],
-        offsets: &[u64; N],
+        &mut self, first_binding: u32, buffers: [&'pool Buffer; N],
+        offsets: [u64; N],
     ) -> Result<()> {
         self.rec.bind_vertex_buffers(first_binding, buffers, offsets)
     }
@@ -85,8 +85,8 @@ impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     /// usage flags don't include `VERTEX_BUFFER`.
     #[doc = crate::man_link!(vkCmdBindVertexBuffers)]
     pub fn bind_vertex_buffers<const N: usize>(
-        &mut self, first_binding: u32, buffers: &[&'pool Buffer; N],
-        offsets: &[u64; N],
+        &mut self, first_binding: u32, buffers: [&'pool Buffer; N],
+        offsets: [u64; N],
     ) -> Result<()> {
         self.rec.bind_vertex_buffers(first_binding, buffers, offsets)
     }
@@ -106,8 +106,8 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     /// usage flags don't include `VERTEX_BUFFER`.
     #[doc = crate::man_link!(vkCmdBindVertexBuffers)]
     pub fn bind_vertex_buffers<const N: usize>(
-        &mut self, first_binding: u32, buffers: &[&'pool Buffer; N],
-        offsets: &[u64; N],
+        &mut self, first_binding: u32, buffers: [&'pool Buffer; N],
+        offsets: [u64; N],
     ) -> Result<()> {
         for buffer in buffers {
             if !buffer.usage().contains(BufferUsageFlags::VERTEX_BUFFER) {
@@ -122,7 +122,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 first_binding,
                 N as u32,
                 vkbuffers.into(),
-                offsets.into(),
+                (&offsets).into(),
             )
         }
         Ok(())

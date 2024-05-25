@@ -6,15 +6,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::collections::HashMap;
+use std::future::Future;
 use std::io::Write;
 use std::mem::size_of;
+use std::ops::Deref;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Context;
 use std::time::Instant;
+use std::{collections::HashMap, ops::DerefMut};
 
-use anyhow::Context;
+use anyhow::Context as _;
 use maia::vk::{self, BufferWithoutMemory};
+use scoped_tls::scoped_thread_local;
 use ultraviolet::{Mat4, Vec3};
+use winit::event_loop::ActiveEventLoop;
 
 fn find_right_directory() -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
@@ -242,7 +248,7 @@ macro_rules! shader {
     }};
 }
 
-fn main() -> anyhow::Result<()> {
+async fn main_loop() -> anyhow::Result<()> {
     find_right_directory().context("Changing dirs")?;
     use winit::event_loop::EventLoop;
     let event_loop = EventLoop::new();
@@ -263,7 +269,7 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     })?;
 
-    let surf = maia::window::create_surface(&inst, &window)?;
+    let mut surf = maia::window::create_surface(&inst, &window)?;
 
     let phy = pick_physical_device(&inst.enumerate_physical_devices()?);
     let queue_family = pick_queue_family(&phy, &surf, &window)?;
@@ -277,7 +283,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     let device_extensions = required_device_extensions(&phy)?;
-    let device = &vk::Device::new(
+    let device = vk::Device::new(
         &phy,
         &vk::DeviceCreateInfo {
             queue_create_infos: vk::slice(&[vk::DeviceQueueCreateInfo {
@@ -294,16 +300,16 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         },
     )?;
-    let mut queue = device.take_queues()[0][0];
+    let mut queue = device.take_queues()[0].pop().unwrap();
 
-    let mut acquire_sem = vk::Semaphore::new(device)?;
-    let mut fence = Some(vk::Fence::new(device)?);
+    let mut acquire_sem = vk::Semaphore::new(&device)?;
+    let mut fence = Some(vk::Fence::new(&device)?);
 
     let window_size = window.inner_size();
     let mut swapchain_size =
         vk::Extent2D { width: window_size.width, height: window_size.height };
     let mut swapchain = vk::ext::SwapchainKHR::new(
-        device,
+        &device,
         &mut surf,
         vk::SwapchainCreateInfoKHR {
             min_image_count: 3,
@@ -316,7 +322,7 @@ fn main() -> anyhow::Result<()> {
     )?;
     let mut swapchain_images = swapchain.images();
 
-    let mut cmd_pool = vk::CommandPoolLifetime::new(device, queue_family)?;
+    let mut cmd_pool = vk::CommandPoolLifetime::new(&device, queue_family)?;
 
     let vertex_size = std::mem::size_of_val(&VERTEX_DATA);
     let index_size = std::mem::size_of_val(&INDEX_DATA);
@@ -327,7 +333,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     let vertex_buffer = vk::BufferWithoutMemory::new(
-        device,
+        &device,
         &vk::BufferCreateInfo {
             size: vertex_size as u64,
             usage: vk::BufferUsageFlags::VERTEX_BUFFER
@@ -336,7 +342,7 @@ fn main() -> anyhow::Result<()> {
         },
     )?;
     let index_buffer = vk::BufferWithoutMemory::new(
-        device,
+        &device,
         &vk::BufferCreateInfo {
             size: index_size as u64,
             usage: vk::BufferUsageFlags::INDEX_BUFFER
@@ -351,13 +357,13 @@ fn main() -> anyhow::Result<()> {
     let ind_start =
         (vert_req.size + ind_req.alignment - 1) & !(ind_req.alignment - 1);
     let memory =
-        &vk::DeviceMemory::new(device, ind_start + ind_req.size, device_mem)?;
+        &vk::DeviceMemory::new(&device, ind_start + ind_req.size, device_mem)?;
 
     let vertex_buffer = vk::Buffer::new(vertex_buffer, memory, 0)?;
     let index_buffer = vk::Buffer::new(index_buffer, memory, ind_start)?;
 
     upload_data(
-        device,
+        &device,
         &mut queue,
         &mut cmd_pool,
         bytemuck::bytes_of(&VERTEX_DATA),
@@ -367,7 +373,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     upload_data(
-        device,
+        &device,
         &mut queue,
         &mut cmd_pool,
         bytemuck::bytes_of(&INDEX_DATA),
@@ -376,7 +382,7 @@ fn main() -> anyhow::Result<()> {
         vk::AccessFlags::INDEX_READ,
     )?;
     let uniform_buffer = vk::BufferWithoutMemory::new(
-        device,
+        &device,
         &vk::BufferCreateInfo {
             size: size_of::<MVP>() as u64,
             usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
@@ -384,7 +390,7 @@ fn main() -> anyhow::Result<()> {
         },
     )?;
     let mut uniform_memory = vk::DeviceMemory::new(
-        device,
+        &device,
         uniform_buffer.memory_requirements().size,
         memory_type(
             device.physical_device(),
@@ -397,7 +403,7 @@ fn main() -> anyhow::Result<()> {
     let uniform_buffer = vk::Buffer::new(uniform_buffer, mapped.memory(), 0)?;
 
     let image = vk::ImageWithoutMemory::new(
-        device,
+        &device,
         &vk::ImageCreateInfo {
             format: vk::Format::R8G8B8A8_SRGB,
             extent: vk::Extent3D { width: 512, height: 512, depth: 1 },
@@ -409,9 +415,9 @@ fn main() -> anyhow::Result<()> {
     let image_reqs = image.memory_requirements();
     assert_ne!(image_reqs.memory_type_bits & (1 << device_mem), 0);
     let image_memory =
-        vk::DeviceMemory::new(device, image_reqs.size, device_mem)?;
+        vk::DeviceMemory::new(&device, image_reqs.size, device_mem)?;
     let image = vk::Image::new(image, &image_memory, 0)?;
-    upload_image(device, &mut queue, &image, &mut cmd_pool)?;
+    upload_image(&device, &mut queue, &image, &mut cmd_pool)?;
     let image_view = vk::ImageView::new(
         &image,
         &vk::ImageViewCreateInfo {
@@ -421,7 +427,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     let render_pass = vk::RenderPass::new(
-        device,
+        &device,
         &vk::RenderPassCreateInfo {
             attachments: vk::slice(&[vk::AttachmentDescription {
                 format: vk::Format::B8G8R8A8_SRGB,
@@ -444,12 +450,13 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     let vertex_shader =
-        vk::ShaderModule::new(device, shader!("triangle.vert"))?;
+        vk::ShaderModule::new(&device, shader!("triangle.vert"))?;
     let fragment_shader =
-        vk::ShaderModule::new(device, shader!("triangle.frag"))?;
+        vk::ShaderModule::new(&device, shader!("triangle.frag"))?;
 
+    let sampler = vk::Sampler::new(&device, &Default::default())?;
     let descriptor_set_layout = vk::DescriptorSetLayout::new(
-        device,
+        &device,
         vec![
             vk::DescriptorSetLayoutBinding {
                 descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
@@ -461,16 +468,12 @@ fn main() -> anyhow::Result<()> {
                 descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 descriptor_count: 1,
                 stage_flags: vk::ShaderStageFlags::FRAGMENT,
-                immutable_samplers: vec![vk::Sampler::new(
-                    device,
-                    &Default::default(),
-                )?
-                .handle()],
+                immutable_samplers: vec![sampler.handle()],
             },
         ],
     )?;
     let mut descriptor_pool = vk::DescriptorPool::new(
-        device,
+        &device,
         1,
         &[
             vk::DescriptorPoolSize {
@@ -486,7 +489,7 @@ fn main() -> anyhow::Result<()> {
     let mut desc_set =
         vk::DescriptorSet::new(&mut descriptor_pool, &descriptor_set_layout)?;
 
-    let mut update = vk::DescriptorSetUpdateBuilder::new(device);
+    let mut update = vk::DescriptorSetUpdateBuilder::new(&device);
     update
         .begin()
         .dst_set(&mut desc_set)
@@ -505,10 +508,9 @@ fn main() -> anyhow::Result<()> {
             &[(&image_view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)],
         )?
         .end();
-    let desc_set = Arc::new(desc_set);
 
     let pipeline_layout = vk::PipelineLayout::new(
-        device,
+        &device,
         Default::default(),
         vec![&descriptor_set_layout],
         vec![],
@@ -575,21 +577,18 @@ fn main() -> anyhow::Result<()> {
 
     let begin = Instant::now();
 
-    let mut redraw = move |draw_size: vk::Extent2D| -> anyhow::Result<()> {
+    let mut redraw = |draw_size: vk::Extent2D| -> anyhow::Result<()> {
         if draw_size != swapchain_size {
             swapchain_size = draw_size;
             framebuffers.clear();
-            swapchain.recreate(
-                &device,
-                vk::SwapchainCreateInfoKHR {
-                    min_image_count: 3,
-                    image_format: vk::Format::B8G8R8A8_SRGB,
-                    image_extent: swapchain_size,
-                    image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
-                        | vk::ImageUsageFlags::TRANSFER_DST,
-                    ..Default::default()
-                },
-            )?;
+            swapchain.recreate(vk::SwapchainCreateInfoKHR {
+                min_image_count: 3,
+                image_format: vk::Format::B8G8R8A8_SRGB,
+                image_extent: swapchain_size,
+                image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::TRANSFER_DST,
+                ..Default::default()
+            })?;
             swapchain_images = swapchain.images();
         }
 
@@ -631,31 +630,31 @@ fn main() -> anyhow::Result<()> {
             ),
         }))?;
 
-        let cmd_pool = cmd_pool.reset()?;
-        let subpass = cmd_pool.allocate_secondary()?;
-        let mut subpass = cmd_pool.begin_secondary(subpass, &render_pass, 0)?;
-        subpass.set_viewport(&vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: draw_size.width as f32,
-            height: draw_size.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        });
-        subpass.bind_pipeline(&pipeline);
-        subpass.bind_vertex_buffers(0, &[(&vertex_buffer, 0)])?;
-        subpass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16)?;
-        subpass.bind_descriptor_sets(
-            vk::PipelineBindPoint::GRAPHICS,
-            &pipeline_layout,
-            0,
-            &[&desc_set],
-            &[],
-        )?;
-        subpass.draw_indexed(6, 1, 0, 0, 0)?;
-        let mut subpass = subpass.end()?;
+        let mut cmd_pool = cmd_pool.reset()?;
+        // let subpass = cmd_pool.allocate_secondary()?;
+        // let mut subpass = cmd_pool.begin_secondary(subpass, &render_pass, 0)?;
+        // subpass.set_viewport(&vk::Viewport {
+        //     x: 0.0,
+        //     y: 0.0,
+        //     width: draw_size.width as f32,
+        //     height: draw_size.height as f32,
+        //     min_depth: 0.0,
+        //     max_depth: 1.0,
+        // });
+        // subpass.bind_pipeline(&pipeline);
+        // subpass.bind_vertex_buffers(0, &[(&vertex_buffer, 0)])?;
+        // subpass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16)?;
+        // subpass.bind_descriptor_sets(
+        //     vk::PipelineBindPoint::GRAPHICS,
+        //     &pipeline_layout,
+        //     0,
+        //     &[&desc_set],
+        //     &[],
+        // )?;
+        // subpass.draw_indexed(6, 1, 0, 0, 0)?;
+        // let mut subpass = subpass.end()?;
 
-        let mut pass = cmd_pool.begin().begin_render_pass_secondary(
+        let mut pass = cmd_pool.begin().begin_render_pass(
             &render_pass,
             &framebuffer,
             &vk::Rect2D {
@@ -669,7 +668,25 @@ fn main() -> anyhow::Result<()> {
                 color: vk::ClearColorValue { f32: [0.1, 0.2, 0.3, 1.0] },
             }],
         )?;
-        pass.execute_commands(&mut [&mut subpass])?;
+        pass.set_viewport(&vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: draw_size.width as f32,
+            height: draw_size.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        });
+        pass.bind_pipeline(&pipeline);
+        pass.bind_vertex_buffers(0, [&vertex_buffer], [0])?;
+        pass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16)?;
+        pass.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &pipeline_layout,
+            0,
+            &[&desc_set],
+            &[],
+        )?;
+        pass.draw_indexed(6, 1, 0, 0, 0)?;
         let mut buf = pass.end()?.end()?;
 
         queue.scope(|s| {
@@ -686,25 +703,62 @@ fn main() -> anyhow::Result<()> {
         Ok(())
     };
 
-    event_loop.run(move |event, _, control_flow| {
-        use winit::event::{Event, WindowEvent};
-        use winit::event_loop::ControlFlow;
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested, ..
-            } => *control_flow = ControlFlow::Exit,
-            Event::MainEventsCleared => {
-                let window_size = window.inner_size();
-                let window_size = vk::Extent2D {
-                    width: window_size.width,
-                    height: window_size.height,
-                };
-                if let Err(e) = redraw(window_size) {
-                    println!("{:?}", e);
-                    *control_flow = ControlFlow::Exit;
-                }
-            }
-            _ => (),
-        }
-    })
+    // event_loop.run(move |event, _, control_flow| {
+    //     use winit::event::{Event, WindowEvent};
+    //     use winit::event_loop::ControlFlow;
+    //     match event {
+    //         Event::WindowEvent {
+    //             event: WindowEvent::CloseRequested, ..
+    //         } => *control_flow = ControlFlow::Exit,
+    //         Event::MainEventsCleared => {
+    //             let window_size = window.inner_size();
+    //             let window_size = vk::Extent2D {
+    //                 width: window_size.width,
+    //                 height: window_size.height,
+    //             };
+    //             if let Err(e) = redraw(window_size) {
+    //                 println!("{:?}", e);
+    //                 *control_flow = ControlFlow::Exit;
+    //             }
+    //         }
+    //         _ => (),
+    //     }
+    // })
+    Ok(())
+}
+
+struct Waker;
+impl std::task::Wake for Waker {
+    fn wake(self: Arc<Self>) {}
+}
+
+struct App<F> {
+    fut: Pin<F>,
+    events: futures_channel::mpsc::Sender<winit::event::WindowEvent>,
+}
+
+scoped_thread_local!(static EVENT_LOOP: ActiveEventLoop);
+
+impl<F> winit::application::ApplicationHandler<()> for App<F>
+where
+    F: DerefMut,
+    <F as Deref>::Target: Future,
+{
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let waker = Arc::new(Waker).into();
+        EVENT_LOOP.set(event_loop, || {
+            self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+        });
+    }
+
+    fn window_event(
+        &mut self, event_loop: &ActiveEventLoop,
+        window_id: winit::window::WindowId, event: winit::event::WindowEvent,
+    ) {
+        self.events.try_send(event).unwrap();
+        let waker = Arc::new(Waker).into();
+        EVENT_LOOP.set(event_loop, || {
+            self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+        });
+    }
 }
