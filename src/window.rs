@@ -11,6 +11,7 @@
 //! extensions. This module is disabled by default because it requires
 //! additional dependencies.
 
+use std::mem::transmute;
 use std::ptr::NonNull;
 
 use crate::error::{Error, Result};
@@ -20,44 +21,46 @@ use crate::ffi::*;
 use crate::instance::Instance;
 use crate::physical_device::PhysicalDevice;
 use crate::types::*;
-use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
+use raw_window_handle::{
+    HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+};
 
 /// Return the required instance extensions to use WSI on the current platform.
 pub fn required_instance_extensions(
-    window: &impl HasRawWindowHandle,
+    display: &impl HasDisplayHandle,
 ) -> Result<&'static [Str<'static>]> {
-    match window.raw_window_handle() {
-        RawWindowHandle::Win32(_) => {
+    match display.display_handle().unwrap().as_raw() {
+        RawDisplayHandle::Windows(_) => {
             const WINDOWS_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::WIN32_SURFACE];
             Ok(&WINDOWS_EXTS)
         }
-        RawWindowHandle::Wayland(_) => {
+        RawDisplayHandle::Wayland(_) => {
             const WAYLAND_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::WAYLAND_SURFACE];
             Ok(&WAYLAND_EXTS)
         }
-        RawWindowHandle::Xlib(_) => {
+        RawDisplayHandle::Xlib(_) => {
             const XLIB_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::XLIB_SURFACE];
             Ok(&XLIB_EXTS)
         }
-        RawWindowHandle::Xcb(_) => {
+        RawDisplayHandle::Xcb(_) => {
             const XCB_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::XCB_SURFACE];
             Ok(&XCB_EXTS)
         }
-        RawWindowHandle::AndroidNdk(_) => {
+        RawDisplayHandle::Android(_) => {
             const ANDROID_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::ANDROID_SURFACE];
             Ok(&ANDROID_EXTS)
         }
-        RawWindowHandle::AppKit(_) => {
+        RawDisplayHandle::AppKit(_) => {
             const MACOS_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::METAL_SURFACE];
             Ok(&MACOS_EXTS)
         }
-        RawWindowHandle::UiKit(_) => {
+        RawDisplayHandle::UiKit(_) => {
             const IOS_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::METAL_SURFACE];
             Ok(&IOS_EXTS)
@@ -67,14 +70,14 @@ pub fn required_instance_extensions(
 }
 
 /// Returns true if the physical device and queue family index can present to
-/// the window.
+/// the display.
 pub fn presentation_support(
     phy: &PhysicalDevice, queue_family_index: u32,
-    window: &impl HasRawWindowHandle,
+    display: &impl HasDisplayHandle,
 ) -> bool {
-    match window.raw_window_handle() {
-        RawWindowHandle::AppKit(_) => true,
-        RawWindowHandle::Xlib(_) => true,
+    match display.display_handle().unwrap().as_raw() {
+        RawDisplayHandle::AppKit(_) => true,
+        RawDisplayHandle::Xlib(_) => true,
         // winit doesn't set the visual_id for some reason so this doesn't work
         // unsafe {
         //     KHRXlibSurface::new(phy.instance()).presentation_support(
@@ -84,14 +87,14 @@ pub fn presentation_support(
         //         handle.visual_id as usize,
         //     )
         // },
-        RawWindowHandle::Wayland(handle) => unsafe {
+        RawDisplayHandle::Wayland(handle) => unsafe {
             KHRWaylandSurface::new(phy.instance()).presentation_support(
                 phy,
                 queue_family_index,
-                NonNull::new(handle.display).unwrap(),
+                handle.display,
             )
         },
-        RawWindowHandle::Win32(_) => KHRWin32Surface::new(phy.instance())
+        RawDisplayHandle::Windows(_) => KHRWin32Surface::new(phy.instance())
             .presentation_support(phy, queue_family_index),
         handle => panic!("Unimplemented window handle type: {:?}", handle),
     }
@@ -100,61 +103,70 @@ pub fn presentation_support(
 /// Create a surface for `window` with the appropriate extension for the current
 /// platform.
 pub fn create_surface<'i>(
-    instance: &'i Instance, window: &impl HasRawWindowHandle,
+    instance: &'i Instance, display: &impl HasDisplayHandle,
+    window: &impl HasWindowHandle,
 ) -> Result<SurfaceKHR<'i>> {
-    match window.raw_window_handle() {
+    match (
+        display.display_handle().unwrap().as_raw(),
+        window.window_handle().unwrap().as_raw(),
+    ) {
         #[cfg(any(target_os = "macos"))]
-        RawWindowHandle::AppKit(handle) => {
+        (
+            RawDisplayHandle::AppKit(display),
+            RawWindowHandle::AppKit(window),
+        ) => unsafe {
             use crate::ext::EXTMetalSurface;
             use raw_window_metal::{appkit, Layer};
 
-            unsafe {
-                match appkit::metal_layer_from_handle(handle) {
-                    Layer::Existing(layer) | Layer::Allocated(layer) => {
-                        EXTMetalSurface::new(instance).create_metal_surface_ext(
-                            &MetalSurfaceCreateInfoEXT {
-                                stype: Default::default(),
-                                next: Default::default(),
-                                flags: Default::default(),
-                                layer: NonNull::new(layer as *mut c_void)
-                                    .unwrap(),
-                            },
-                        )
-                    }
-                    Layer::None => Err(Error::Other), //TODO
-                }
-            }
-        }
-        RawWindowHandle::Xlib(handle) => unsafe {
+            let layer = match appkit::metal_layer_from_handle(window) {
+                Layer::Existing(layer) | Layer::Allocated(layer) => layer,
+            };
+            EXTMetalSurface::new(instance).create_metal_surface_ext(
+                &MetalSurfaceCreateInfoEXT {
+                    stype: Default::default(),
+                    next: Default::default(),
+                    flags: Default::default(),
+                    layer: NonNull::new(layer as *mut c_void).unwrap(),
+                },
+            )
+        },
+        (RawDisplayHandle::Xlib(display), RawWindowHandle::Xlib(window)) => unsafe {
             KHRXlibSurface::new(instance).create_xlib_surface_ext(
                 &XlibSurfaceCreateInfoKHR {
                     stype: Default::default(),
                     next: Default::default(),
                     flags: Default::default(),
-                    display: NonNull::new(handle.display).unwrap(),
-                    window: handle.window as usize,
+                    display: display.display.unwrap(),
+                    window: window.window as usize,
                 },
             )
         },
-        RawWindowHandle::Wayland(handle) => unsafe {
+        (
+            RawDisplayHandle::Wayland(display),
+            RawWindowHandle::Wayland(window),
+        ) => unsafe {
             KHRWaylandSurface::new(instance).create_wayland_surface_ext(
                 &WaylandSurfaceCreateInfoKHR {
                     stype: Default::default(),
                     next: Default::default(),
                     flags: Default::default(),
-                    display: NonNull::new(handle.display).unwrap(),
-                    surface: NonNull::new(handle.surface).unwrap(),
+                    display: display.display,
+                    surface: window.surface,
                 },
             )
         },
-        RawWindowHandle::Win32(handle) => unsafe {
+        (_, RawWindowHandle::Win32(window)) => unsafe {
+            let hinstance: Option<NonNull<c_void>> =
+                transmute(window.hinstance);
+            let hwnd: NonNull<c_void> = transmute(window.hwnd);
+
             KHRWin32Surface::new(instance).create_win32_surface_ext(
                 &Win32SurfaceCreateInfoKHR {
                     stype: Default::default(),
                     next: Default::default(),
                     flags: Default::default(),
-                    hinstance: NonNull::new(handle.hinstance).unwrap(),
-                    hwnd: NonNull::new(handle.hwnd).unwrap(),
+                    hinstance: hinstance.unwrap(),
+                    hwnd,
                 },
             )
         },
