@@ -16,6 +16,11 @@ use crate::queue::Queue;
 use crate::types::*;
 
 /// A logical device.
+/// Note that references to the device and instance are subject to the
+/// [drop check](https://doc.rust-lang.org/nomicon/dropck.html) and may not be
+/// dangling during destruction of the referring object.
+// TODO: According to the spec, other references generally are allowed to
+// dangle during destruction. Do we respect this?
 pub struct Device<'i> {
     handle: Handle<VkDevice>,
     pub(crate) fun: DeviceFn,

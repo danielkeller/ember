@@ -12,7 +12,7 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::pin::{pin, Pin};
 use std::sync::Arc;
-use std::task::Context;
+use std::task::{Context, Poll};
 use std::time::Instant;
 use std::{collections::HashMap, ops::DerefMut};
 
@@ -242,12 +242,15 @@ fn upload_image(
 }
 
 macro_rules! shader {
-    ($name:literal) => {{
-        const BYTES: &[u8] =
-            include_bytes!(concat!(env!("OUT_DIR"), "/shaders/", $name));
-        // Align to u32.
-        &bytemuck::cast_slice(BYTES).to_vec()
-    }};
+    ($name:literal) => {
+        &{
+            const BYTES: &[u8] =
+                include_bytes!(concat!(env!("OUT_DIR"), "/shaders/", $name));
+            let mut words = vec![0u32; BYTES.len() / 4];
+            bytemuck::cast_slice_mut(&mut words).copy_from_slice(BYTES);
+            words
+        }
+    };
 }
 
 async fn main_loop() -> anyhow::Result<()> {
@@ -490,24 +493,24 @@ async fn main_loop() -> anyhow::Result<()> {
         vk::DescriptorSet::new(&mut descriptor_pool, &descriptor_set_layout)?;
 
     let mut update = vk::DescriptorSetUpdateBuilder::new(&device);
-    update
-        .begin()
-        .dst_set(&mut desc_set)
-        .uniform_buffers(
-            0,
-            0,
-            &[vk::DescriptorBufferInfo {
-                buffer: &uniform_buffer,
-                offset: 0,
-                range: None,
-            }],
-        )?
-        .combined_image_samplers(
-            1,
-            0,
-            &[(&image_view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)],
-        )?
-        .end();
+    // update
+    //     .begin()
+    //     .dst_set(&mut desc_set)
+    //     .uniform_buffers(
+    //         0,
+    //         0,
+    //         &[vk::DescriptorBufferInfo {
+    //             buffer: &uniform_buffer,
+    //             offset: 0,
+    //             range: None,
+    //         }],
+    //     )?
+    //     .combined_image_samplers(
+    //         1,
+    //         0,
+    //         &[(&image_view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)],
+    //     )?
+    //     .end();
 
     let pipeline_layout = vk::PipelineLayout::new(
         &device,
@@ -573,15 +576,25 @@ async fn main_loop() -> anyhow::Result<()> {
             cache: None,
         })?;
 
-    let mut framebuffers = HashMap::new();
+    let mut swapchain_imageviews = vec![];
+    let mut framebuffers = vec![];
+    let mut present_semaphores = [
+        vk::Semaphore::new(&device)?,
+        vk::Semaphore::new(&device)?,
+        vk::Semaphore::new(&device)?,
+    ];
 
     let begin = Instant::now();
 
     loop {
-        winit_event(|evt| {
-            matches!(evt, WindowEvent::RedrawRequested).then_some(())
-        })
-        .await;
+        window.request_redraw();
+        use WindowEvent::*;
+        let evt =
+            winit_event(|evt| matches!(evt, RedrawRequested | CloseRequested));
+        if let CloseRequested = evt.await {
+            return Ok(());
+        }
+        println!("redraw");
 
         let draw_size = window.inner_size();
         let draw_size =
@@ -589,7 +602,8 @@ async fn main_loop() -> anyhow::Result<()> {
 
         if draw_size != swapchain_size {
             swapchain_size = draw_size;
-            framebuffers.clear();
+            drop(framebuffers);
+            drop(swapchain_imageviews);
             swapchain.recreate(vk::SwapchainCreateInfoKHR {
                 min_image_count: 3,
                 image_format: vk::Format::B8G8R8A8_SRGB,
@@ -599,29 +613,31 @@ async fn main_loop() -> anyhow::Result<()> {
                 ..Default::default()
             })?;
             swapchain_images = swapchain.images();
+            swapchain_imageviews = vec![];
+            for image in swapchain_images.images() {
+                swapchain_imageviews.push(vk::ImageView::new(
+                    image,
+                    &vk::ImageViewCreateInfo {
+                        format: vk::Format::B8G8R8A8_SRGB,
+                        ..Default::default()
+                    },
+                )?);
+            }
+            framebuffers = vec![];
+            for img_view in &swapchain_imageviews {
+                framebuffers.push(vk::Framebuffer::new(
+                    &render_pass,
+                    Default::default(),
+                    &[&img_view],
+                    swapchain_size.into(),
+                )?)
+            }
         }
 
         let (img, _subopt) =
             swapchain_images.acquire_next_image(&mut acquire_sem, u64::MAX)?;
-
-        if !framebuffers.contains_key(&img) {
-            let img_view = vk::ImageView::new(
-                &swapchain_images.images()[img],
-                &vk::ImageViewCreateInfo {
-                    format: vk::Format::B8G8R8A8_SRGB,
-                    ..Default::default()
-                },
-            )?;
-            let fb = vk::Framebuffer::new(
-                &render_pass,
-                Default::default(),
-                &[&img_view],
-                swapchain_size.into(),
-            )?;
-            let sem = vk::Semaphore::new(&device)?;
-            framebuffers.insert(&img, (fb, sem));
-        }
-        let (framebuffer, present_sem) = framebuffers.get_mut(&img).unwrap();
+        let framebuffer = &framebuffers[img];
+        let present_sem = &mut present_semaphores[img];
 
         let time = Instant::now().duration_since(begin);
 
@@ -705,7 +721,7 @@ async fn main_loop() -> anyhow::Result<()> {
                     vk::PipelineStageFlags::TOP_OF_PIPE,
                 ),
                 vk::Submit::Command(&mut buf),
-                vk::Submit::Signal(&present_sem),
+                vk::Submit::Signal(present_sem),
             ]);
         });
         swapchain_images.present(&mut queue, img, present_sem)?;
@@ -724,18 +740,21 @@ struct App<F> {
 scoped_thread_local!(static EVENT_LOOP: ActiveEventLoop);
 scoped_thread_local!(static WINDOW_EVENT: WindowEvent);
 
-async fn winit_event<T>(f: impl Fn(&WindowEvent) -> Option<T>) -> T {
-    poll_fn(|_| {
-        use std::task::Poll;
+async fn winit_event(f: impl Fn(&WindowEvent) -> bool) -> WindowEvent {
+    poll_fn(|cx| {
         if !EVENT_LOOP.is_set() {
             panic!("winit_event() called outside of event loop")
         }
         if !WINDOW_EVENT.is_set() {
             return Poll::Pending;
         }
-        WINDOW_EVENT.with(|evt| match f(evt) {
-            Some(value) => Poll::Ready(value),
-            None => Poll::Pending,
+        WINDOW_EVENT.with(|evt| {
+            if f(evt) {
+                Poll::Ready(evt.clone())
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
         })
     })
     .await
@@ -749,7 +768,11 @@ where
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let waker = Arc::new(Waker).into();
         EVENT_LOOP.set(event_loop, || {
-            self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+            if let Poll::Ready(_) =
+                self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+            {
+                event_loop.exit();
+            }
         });
     }
 
@@ -760,15 +783,20 @@ where
         let waker = Arc::new(Waker).into();
         EVENT_LOOP.set(event_loop, || {
             WINDOW_EVENT.set(&event, || {
-                self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+                if let Poll::Ready(_) =
+                    self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+                {
+                    event_loop.exit();
+                }
             })
         });
     }
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     use winit::event_loop::EventLoop;
     let fut = pin!(main_loop());
-    let event_loop = EventLoop::new().unwrap();
-    event_loop.run_app(&mut App { fut });
+    let event_loop = EventLoop::new()?;
+    event_loop.run_app(&mut App { fut })?;
+    Ok(())
 }
