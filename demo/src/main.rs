@@ -6,11 +6,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::future::Future;
+use std::future::{poll_fn, Future};
 use std::io::Write;
 use std::mem::size_of;
 use std::ops::Deref;
-use std::pin::Pin;
+use std::pin::{pin, Pin};
 use std::sync::Arc;
 use std::task::Context;
 use std::time::Instant;
@@ -20,7 +20,9 @@ use anyhow::Context as _;
 use maia::vk::{self, BufferWithoutMemory};
 use scoped_tls::scoped_thread_local;
 use ultraviolet::{Mat4, Vec3};
+use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
+use winit::window::Window;
 
 fn find_right_directory() -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
@@ -250,9 +252,8 @@ macro_rules! shader {
 
 async fn main_loop() -> anyhow::Result<()> {
     find_right_directory().context("Changing dirs")?;
-    use winit::event_loop::EventLoop;
-    let event_loop = EventLoop::new();
-    let window = winit::window::Window::new(&event_loop)?;
+    let window = EVENT_LOOP
+        .with(|evtloop| evtloop.create_window(Window::default_attributes()))?;
     window.set_title("Maia Demo");
 
     let mut instance_exts = vec![];
@@ -269,7 +270,7 @@ async fn main_loop() -> anyhow::Result<()> {
         ..Default::default()
     })?;
 
-    let mut surf = maia::window::create_surface(&inst, &window)?;
+    let mut surf = maia::window::create_surface(&inst, &window, &window)?;
 
     let phy = pick_physical_device(&inst.enumerate_physical_devices()?);
     let queue_family = pick_queue_family(&phy, &surf, &window)?;
@@ -303,7 +304,6 @@ async fn main_loop() -> anyhow::Result<()> {
     let mut queue = device.take_queues()[0].pop().unwrap();
 
     let mut acquire_sem = vk::Semaphore::new(&device)?;
-    let mut fence = Some(vk::Fence::new(&device)?);
 
     let window_size = window.inner_size();
     let mut swapchain_size =
@@ -577,7 +577,16 @@ async fn main_loop() -> anyhow::Result<()> {
 
     let begin = Instant::now();
 
-    let mut redraw = |draw_size: vk::Extent2D| -> anyhow::Result<()> {
+    loop {
+        winit_event(|evt| {
+            matches!(evt, WindowEvent::RedrawRequested).then_some(())
+        })
+        .await;
+
+        let draw_size = window.inner_size();
+        let draw_size =
+            vk::Extent2D { width: draw_size.width, height: draw_size.height };
+
         if draw_size != swapchain_size {
             swapchain_size = draw_size;
             framebuffers.clear();
@@ -700,31 +709,7 @@ async fn main_loop() -> anyhow::Result<()> {
             ]);
         });
         swapchain_images.present(&mut queue, img, present_sem)?;
-        Ok(())
-    };
-
-    // event_loop.run(move |event, _, control_flow| {
-    //     use winit::event::{Event, WindowEvent};
-    //     use winit::event_loop::ControlFlow;
-    //     match event {
-    //         Event::WindowEvent {
-    //             event: WindowEvent::CloseRequested, ..
-    //         } => *control_flow = ControlFlow::Exit,
-    //         Event::MainEventsCleared => {
-    //             let window_size = window.inner_size();
-    //             let window_size = vk::Extent2D {
-    //                 width: window_size.width,
-    //                 height: window_size.height,
-    //             };
-    //             if let Err(e) = redraw(window_size) {
-    //                 println!("{:?}", e);
-    //                 *control_flow = ControlFlow::Exit;
-    //             }
-    //         }
-    //         _ => (),
-    //     }
-    // })
-    Ok(())
+    }
 }
 
 struct Waker;
@@ -734,10 +719,27 @@ impl std::task::Wake for Waker {
 
 struct App<F> {
     fut: Pin<F>,
-    events: futures_channel::mpsc::Sender<winit::event::WindowEvent>,
 }
 
 scoped_thread_local!(static EVENT_LOOP: ActiveEventLoop);
+scoped_thread_local!(static WINDOW_EVENT: WindowEvent);
+
+async fn winit_event<T>(f: impl Fn(&WindowEvent) -> Option<T>) -> T {
+    poll_fn(|_| {
+        use std::task::Poll;
+        if !EVENT_LOOP.is_set() {
+            panic!("winit_event() called outside of event loop")
+        }
+        if !WINDOW_EVENT.is_set() {
+            return Poll::Pending;
+        }
+        WINDOW_EVENT.with(|evt| match f(evt) {
+            Some(value) => Poll::Ready(value),
+            None => Poll::Pending,
+        })
+    })
+    .await
+}
 
 impl<F> winit::application::ApplicationHandler<()> for App<F>
 where
@@ -753,12 +755,20 @@ where
 
     fn window_event(
         &mut self, event_loop: &ActiveEventLoop,
-        window_id: winit::window::WindowId, event: winit::event::WindowEvent,
+        _window_id: winit::window::WindowId, event: WindowEvent,
     ) {
-        self.events.try_send(event).unwrap();
         let waker = Arc::new(Waker).into();
         EVENT_LOOP.set(event_loop, || {
-            self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+            WINDOW_EVENT.set(&event, || {
+                self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+            })
         });
     }
+}
+
+fn main() {
+    use winit::event_loop::EventLoop;
+    let fut = pin!(main_loop());
+    let event_loop = EventLoop::new().unwrap();
+    event_loop.run_app(&mut App { fut });
 }

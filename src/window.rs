@@ -111,10 +111,7 @@ pub fn create_surface<'i>(
         window.window_handle().unwrap().as_raw(),
     ) {
         #[cfg(any(target_os = "macos"))]
-        (
-            RawDisplayHandle::AppKit(display),
-            RawWindowHandle::AppKit(window),
-        ) => unsafe {
+        (_, RawWindowHandle::AppKit(window)) => unsafe {
             use crate::ext::EXTMetalSurface;
             use raw_window_metal::{appkit, Layer};
 
