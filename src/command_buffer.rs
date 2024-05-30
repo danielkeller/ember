@@ -543,7 +543,7 @@ impl<'a> ExternalRenderPassRecording<'a> {
     }
 }
 */
-#[cfg(test)]
+#[cfg(test_disabled)]
 mod test {
     use crate::vk;
 

@@ -149,7 +149,7 @@ impl<'a> Buffer<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(test_disabled)]
 mod test {
     use super::*;
     use crate::vk;

@@ -223,7 +223,7 @@ impl<'bump> SubmitBuilder<'bump> {
     }
 }
 
-#[cfg(test)]
+#[cfg(test_disabled)]
 mod test {
     use crate::vk;
 

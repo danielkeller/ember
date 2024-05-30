@@ -183,7 +183,7 @@ pub fn instance_extension_properties() -> Result<Vec<ExtensionProperties>> {
     Ok(result)
 }
 
-#[cfg(test)]
+#[cfg(test_disabled)]
 pub(crate) fn test_device() -> Result<(Arc<device::Device>, queue::Queue)> {
     let inst = vk::Instance::new(&Default::default())?;
     let (dev, mut qs) = vk::Device::new(

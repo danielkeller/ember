@@ -324,6 +324,11 @@ async fn main_loop() -> anyhow::Result<()> {
         },
     )?;
     let mut swapchain_images = swapchain.images();
+    let mut present_semaphores = [
+        vk::Semaphore::new(&device)?,
+        vk::Semaphore::new(&device)?,
+        vk::Semaphore::new(&device)?,
+    ];
 
     let mut cmd_pool = vk::CommandPoolLifetime::new(&device, queue_family)?;
 
@@ -452,6 +457,28 @@ async fn main_loop() -> anyhow::Result<()> {
         },
     )?;
 
+    let mut swapchain_imageviews = vec![];
+    for img in swapchain_images.images() {
+        swapchain_imageviews.push(vk::ImageView::new(
+            img,
+            &vk::ImageViewCreateInfo {
+                format: vk::Format::B8G8R8A8_SRGB,
+                ..Default::default()
+            },
+        )?);
+    }
+    let mut framebuffers = vec![];
+    for img_view in &swapchain_imageviews {
+        framebuffers.push((|swapchain_size, img_view| {
+            vk::Framebuffer::new(
+                &render_pass,
+                Default::default(),
+                &[img_view],
+                swapchain_size,
+            )
+        })(swapchain_size.into(), img_view)?);
+    }
+
     let vertex_shader =
         vk::ShaderModule::new(&device, shader!("triangle.vert"))?;
     let fragment_shader =
@@ -493,24 +520,24 @@ async fn main_loop() -> anyhow::Result<()> {
         vk::DescriptorSet::new(&mut descriptor_pool, &descriptor_set_layout)?;
 
     let mut update = vk::DescriptorSetUpdateBuilder::new(&device);
-    // update
-    //     .begin()
-    //     .dst_set(&mut desc_set)
-    //     .uniform_buffers(
-    //         0,
-    //         0,
-    //         &[vk::DescriptorBufferInfo {
-    //             buffer: &uniform_buffer,
-    //             offset: 0,
-    //             range: None,
-    //         }],
-    //     )?
-    //     .combined_image_samplers(
-    //         1,
-    //         0,
-    //         &[(&image_view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)],
-    //     )?
-    //     .end();
+    update
+        .begin()
+        .dst_set(&mut desc_set)
+        .uniform_buffers(
+            0,
+            0,
+            &[vk::DescriptorBufferInfo {
+                buffer: &uniform_buffer,
+                offset: 0,
+                range: None,
+            }],
+        )?
+        .combined_image_samplers(
+            1,
+            0,
+            &[(&image_view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)],
+        )?
+        .end();
 
     let pipeline_layout = vk::PipelineLayout::new(
         &device,
@@ -576,14 +603,6 @@ async fn main_loop() -> anyhow::Result<()> {
             cache: None,
         })?;
 
-    let mut swapchain_imageviews = vec![];
-    let mut framebuffers = vec![];
-    let mut present_semaphores = [
-        vk::Semaphore::new(&device)?,
-        vk::Semaphore::new(&device)?,
-        vk::Semaphore::new(&device)?,
-    ];
-
     let begin = Instant::now();
 
     loop {
@@ -594,7 +613,6 @@ async fn main_loop() -> anyhow::Result<()> {
         if let CloseRequested = evt.await {
             return Ok(());
         }
-        println!("redraw");
 
         let draw_size = window.inner_size();
         let draw_size =
@@ -614,9 +632,9 @@ async fn main_loop() -> anyhow::Result<()> {
             })?;
             swapchain_images = swapchain.images();
             swapchain_imageviews = vec![];
-            for image in swapchain_images.images() {
+            for img in swapchain_images.images() {
                 swapchain_imageviews.push(vk::ImageView::new(
-                    image,
+                    img,
                     &vk::ImageViewCreateInfo {
                         format: vk::Format::B8G8R8A8_SRGB,
                         ..Default::default()
@@ -625,12 +643,16 @@ async fn main_loop() -> anyhow::Result<()> {
             }
             framebuffers = vec![];
             for img_view in &swapchain_imageviews {
-                framebuffers.push(vk::Framebuffer::new(
-                    &render_pass,
-                    Default::default(),
-                    &[&img_view],
-                    swapchain_size.into(),
-                )?)
+                framebuffers.push((|swapchain_size, img_view| {
+                    vk::Framebuffer::new(
+                        &render_pass,
+                        Default::default(),
+                        &[img_view],
+                        swapchain_size,
+                    )
+                })(
+                    swapchain_size.into(), img_view
+                )?);
             }
         }
 
@@ -763,12 +785,12 @@ async fn winit_event(f: impl Fn(&WindowEvent) -> bool) -> WindowEvent {
 impl<F> winit::application::ApplicationHandler<()> for App<F>
 where
     F: DerefMut,
-    <F as Deref>::Target: Future,
+    <F as Deref>::Target: Future<Output = ()>,
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let waker = Arc::new(Waker).into();
         EVENT_LOOP.set(event_loop, || {
-            if let Poll::Ready(_) =
+            if let Poll::Ready(()) =
                 self.fut.as_mut().poll(&mut Context::from_waker(&waker))
             {
                 event_loop.exit();
@@ -783,7 +805,7 @@ where
         let waker = Arc::new(Waker).into();
         EVENT_LOOP.set(event_loop, || {
             WINDOW_EVENT.set(&event, || {
-                if let Poll::Ready(_) =
+                if let Poll::Ready(()) =
                     self.fut.as_mut().poll(&mut Context::from_waker(&waker))
                 {
                     event_loop.exit();
@@ -795,7 +817,11 @@ where
 
 fn main() -> anyhow::Result<()> {
     use winit::event_loop::EventLoop;
-    let fut = pin!(main_loop());
+    let fut = pin!(async {
+        if let Err(err) = main_loop().await {
+            eprintln!("{err:?}");
+        }
+    });
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut App { fut })?;
     Ok(())

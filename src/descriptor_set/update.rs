@@ -125,19 +125,19 @@ struct Resource {
 
 /// A builder for a call to vkUpdateDescriptorSets.
 #[must_use = "This object does nothing until end() is called."]
-pub struct DescriptorSetUpdates<'a> {
-    device: &'a Device<'a>,
-    bump: &'a bumpalo::Bump,
-    writes: BumpVec<'a, VkWriteDescriptorSet<'a>>,
-    copies: BumpVec<'a, VkCopyDescriptorSet<'a>>,
-    dst_sets: BumpVec<'a, &'a mut DescriptorSet<'a>>,
-    resources: BumpVec<'a, Resource>,
+pub struct DescriptorSetUpdates<'u, 's> {
+    device: &'u Device<'u>,
+    bump: &'u bumpalo::Bump,
+    writes: BumpVec<'u, VkWriteDescriptorSet<'u>>,
+    copies: BumpVec<'u, VkCopyDescriptorSet<'u>>,
+    dst_sets: BumpVec<'u, &'u mut DescriptorSet<'s>>,
+    resources: BumpVec<'u, Resource>,
 }
 
 impl<'d> DescriptorSetUpdateBuilder<'d> {
     /// Begin creating a call to vkUpdateDescriptorSets. Since these calls are
     /// expensive, try to combine them as much as possible.
-    pub fn begin(&mut self) -> DescriptorSetUpdates<'_> {
+    pub fn begin<'u, 's>(&'u mut self) -> DescriptorSetUpdates<'u, 's> {
         let bump = &*self.scratch.get_mut();
         DescriptorSetUpdates {
             device: &self.device,
@@ -153,15 +153,15 @@ impl<'d> DescriptorSetUpdateBuilder<'d> {
 /// A builder to update a single descriptor set.
 #[must_use = "This object does nothing until end() is called."]
 pub struct DescriptorSetUpdate<'s, 'u> {
-    pub(crate) updates: DescriptorSetUpdates<'u>,
+    pub(crate) updates: DescriptorSetUpdates<'u, 's>,
     pub(crate) set: &'u mut DescriptorSet<'s>,
 }
 
-impl<'a> DescriptorSetUpdates<'a> {
+impl<'u, 's> DescriptorSetUpdates<'u, 's> {
     /// Add updates to the given set to the builder.
-    pub fn dst_set<'s>(
-        self, set: &'a mut DescriptorSet<'s>,
-    ) -> DescriptorSetUpdate<'s, 'a> {
+    pub fn dst_set(
+        self, set: &'u mut DescriptorSet<'s>,
+    ) -> DescriptorSetUpdate<'s, 'u> {
         assert_eq!(&*set.layout.device, self.device);
         DescriptorSetUpdate { updates: self, set }
     }
@@ -206,7 +206,7 @@ macro_rules! image_checks {
     };
 }
 
-impl<'u, 's: 'u> DescriptorSetUpdate<'u, 's> {
+impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     /// Finish the builder and call vkUpdateDescriptorSets.
     #[doc = crate::man_link!(vkUpdateDescriptorSets)]
     pub fn end(mut self) {

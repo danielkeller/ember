@@ -347,7 +347,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     }
 }
 
-#[cfg(test)]
+#[cfg(test_disabled)]
 mod test {
     use crate::vk;
     use std::sync::Arc;

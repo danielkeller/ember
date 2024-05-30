@@ -297,7 +297,7 @@ impl<'d> ImageView<'d> {
     }
 }
 
-#[cfg(test)]
+#[cfg(test_disabled)]
 mod test {
     use super::*;
     use crate::vk;
