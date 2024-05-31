@@ -6,6 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::cell::Cell;
 use std::future::{poll_fn, Future};
 use std::io::Write;
 use std::mem::size_of;
@@ -760,24 +761,22 @@ struct App<F> {
 }
 
 scoped_thread_local!(static EVENT_LOOP: ActiveEventLoop);
-scoped_thread_local!(static WINDOW_EVENT: WindowEvent);
+thread_local!(static WINDOW_EVENT: Cell<Option<WindowEvent>> = Cell::new(None));
 
 async fn winit_event(f: impl Fn(&WindowEvent) -> bool) -> WindowEvent {
     poll_fn(|cx| {
         if !EVENT_LOOP.is_set() {
             panic!("winit_event() called outside of event loop")
         }
-        if !WINDOW_EVENT.is_set() {
-            return Poll::Pending;
-        }
-        WINDOW_EVENT.with(|evt| {
-            if f(evt) {
-                Poll::Ready(evt.clone())
+        if let Some(val) = WINDOW_EVENT.take() {
+            if f(&val) {
+                return Poll::Ready(val);
             } else {
-                cx.waker().wake_by_ref();
-                Poll::Pending
+                WINDOW_EVENT.replace(Some(val));
             }
-        })
+        }
+        cx.waker().wake_by_ref();
+        Poll::Pending
     })
     .await
 }
@@ -804,13 +803,12 @@ where
     ) {
         let waker = Arc::new(Waker).into();
         EVENT_LOOP.set(event_loop, || {
-            WINDOW_EVENT.set(&event, || {
-                if let Poll::Ready(()) =
-                    self.fut.as_mut().poll(&mut Context::from_waker(&waker))
-                {
-                    event_loop.exit();
-                }
-            })
+            WINDOW_EVENT.replace(Some(event));
+            if let Poll::Ready(()) =
+                self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+            {
+                event_loop.exit();
+            }
         });
     }
 }

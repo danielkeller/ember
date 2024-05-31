@@ -256,9 +256,9 @@ impl<'chain> SwapchainImages<'chain> {
         &mut self, queue: &mut Queue, image: usize, wait: &mut Semaphore,
     ) -> Result<ImageOptimality> {
         assert!(image < self.images.len(), "'image' out of bounds");
-        if wait.signaller.is_none() {
-            return Err(Error::InvalidArgument);
-        }
+        // if wait.signaller.is_none() {
+        //     return Err(Error::InvalidArgument);
+        // }
 
         let res = unsafe {
             (self.fun.queue_present_khr)(
