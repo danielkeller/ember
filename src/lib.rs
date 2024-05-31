@@ -165,6 +165,32 @@ fn foo() {
     poolset.reset();
 }
 
+struct Scope<'s>(std::marker::PhantomData<&'s mut &'s ()>);
+
+impl<'s> Scope<'s> {
+    fn run_mut(&mut self, _: &'s mut ()) {}
+    fn run(&mut self, _: &'s ()) {}
+}
+
+fn loop_scope<F, T>(vs: &mut [T], mut f: F)
+where
+    F: for<'a> FnMut(&mut Scope<'a>, &'a mut T),
+{
+    loop {
+        for v in vs.iter_mut() {
+            let mut s = Scope(std::marker::PhantomData);
+            f(&mut s, v)
+        }
+    }
+}
+
+fn test_the_scope() {
+    let mut vs = [(), ()];
+    loop_scope(&mut vs, |s, v| {
+        s.run_mut(v);
+    });
+}
+
 #[doc = crate::man_link!(vkEnumerateInstanceExtensionProperties)]
 pub fn instance_extension_properties() -> Result<Vec<ExtensionProperties>> {
     let mut len = 0;
@@ -241,7 +267,7 @@ pub mod vk {
         GraphicsPipelineCreateInfo, Pipeline, PipelineCache, PipelineLayout,
     };
     pub use crate::queue::Queue;
-    pub use crate::queue::Submit;
+    pub use crate::queue::SubmitScope;
     pub use crate::render_pass::RenderPass;
     pub use crate::sampler::Sampler;
     pub use crate::semaphore::Semaphore;

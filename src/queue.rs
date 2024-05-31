@@ -16,7 +16,7 @@ use crate::device::Device;
 use crate::error::Result;
 use crate::exclusive::Exclusive;
 use crate::ffi::{Array, Null};
-use crate::semaphore::Semaphore;
+use crate::semaphore::{Semaphore, SignalledSemaphore};
 use crate::types::*;
 use crate::vk::PipelineStageFlags;
 
@@ -81,6 +81,11 @@ pub struct SubmitScope<'env> {
     handle: RefCell<Mut<'env, VkQueue>>,
     device: &'env Device<'env>,
     scratch: &'env bumpalo::Bump,
+    submits: BumpVec<'env, VkSubmitInfo<'env, Null>>,
+    wait: BumpVec<'env, Ref<'env, VkSemaphore>>,
+    masks: BumpVec<'env, PipelineStageFlags>,
+    commands: BumpVec<'env, Mut<'env, VkCommandBuffer>>,
+    signal: BumpVec<'env, Ref<'env, VkSemaphore>>,
 }
 
 impl Drop for SubmitScope<'_> {
@@ -102,26 +107,52 @@ impl Drop for SubmitScope<'_> {
 }
 
 impl<'d> Queue<'d> {
-    pub fn scope<'env, F>(&'env mut self, f: F)
-    where
-        F: for<'scope> FnOnce(&'scope SubmitScope<'env>),
-    {
-        f(&SubmitScope {
+    fn submit_scope(&mut self) -> SubmitScope<'_> {
+        let scratch = self.scratch.get_mut();
+        SubmitScope {
             handle: self.handle.borrow_mut().into(),
             device: self.device,
-            scratch: self.scratch.get_mut(),
-        });
+            scratch,
+            submits: bumpalo::vec![in scratch],
+            wait: bumpalo::vec![in scratch],
+            masks: bumpalo::vec![in scratch],
+            commands: bumpalo::vec![in scratch],
+            signal: bumpalo::vec![in scratch],
+        }
+    }
+
+    pub fn submit<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut SubmitScope) -> R,
+    {
+        let mut submit_scope = self.submit_scope();
+        let result = f(&mut submit_scope);
+        submit_scope.flush();
+        result
     }
 
     /// Scoped submit that allows new commands to be submitted before the
     /// previous ones complete. This can improve device utilization because
     /// draining and refilling work queues on the device takes some time.
-    pub fn double_buffered_scope<'env, F, T>(
-        &'env mut self, (_a, _b): (&'env mut T, &'env mut T), _f: F,
-    ) where
-        F: for<'scope> FnMut(&'scope SubmitScope<'env>, &'scope mut T) -> bool,
+    pub fn submit_loop<F, T>(&mut self, values: &mut [T], mut f: F)
+    where
+        F: for<'s> FnMut(&SubmitScope<'s>, &'s mut T) -> bool,
     {
+        loop {
+            for value in values.iter_mut() {
+                let mut submit_scope = self.submit_scope();
+                let result = f(&mut submit_scope, value);
+                submit_scope.flush();
+                // FIXME: dropping the scope drains the queue, don't do that.
+                if !result {
+                    return;
+                }
+            }
+        }
     }
+
+    // TODO: Async version of submit_loop that disables the device while it's
+    // not running.
 
     #[doc = crate::man_link!(vkQueueWaitIdle)]
     pub fn wait_idle(&mut self) -> Result<()> {
@@ -131,60 +162,52 @@ impl<'d> Queue<'d> {
     }
 }
 
-#[doc = crate::man_link!(VkSubmitInfo)]
-pub enum Submit<'a> {
-    Wait(&'a Semaphore<'a>, PipelineStageFlags),
-    Command(&'a mut CommandBuffer<'a>),
-    Signal(&'a Semaphore<'a>),
-}
+impl<'s> SubmitScope<'s> {
+    /// Call
+    #[doc = crate::man_link!(vkQueueSubmit)]
+    /// immediately with all commands so far.
+    pub fn flush(&mut self) {
+        self.advance();
 
-impl<'env> SubmitScope<'env> {
-    pub fn submit<'scope>(
-        &'scope self, infos: impl IntoIterator<Item = Submit<'env>>,
-    ) {
-        let mut builder = SubmitBuilder {
-            scratch: self.scratch,
-            submits: bumpalo::vec![in self.scratch],
-            wait: bumpalo::vec![in self.scratch],
-            masks: bumpalo::vec![in self.scratch],
-            commands: bumpalo::vec![in self.scratch],
-            signal: bumpalo::vec![in self.scratch],
-        };
-        for info in infos {
-            match info {
-                Submit::Wait(semaphore, wait_stage_mask) => {
-                    builder.add_wait(semaphore.handle(), wait_stage_mask)
-                }
-                Submit::Command(cmd) => builder.add_command(cmd.handle_mut()),
-                Submit::Signal(semaphore) => {
-                    builder.add_signal(semaphore.handle())
-                }
+        if !self.submits.is_empty() {
+            unsafe {
+                (self.device.fun.queue_submit)(
+                    self.handle.borrow_mut().reborrow_mut(),
+                    self.submits.len() as u32,
+                    Array::from_slice(&self.submits),
+                    None,
+                )
             }
-        }
-        builder.advance();
+            .unwrap();
 
-        unsafe {
-            (self.device.fun.queue_submit)(
-                self.handle.borrow_mut().reborrow_mut(),
-                builder.submits.len() as u32,
-                Array::from_slice(&builder.submits),
-                None,
-            )
+            self.submits.clear();
         }
-        .unwrap();
     }
-}
 
-struct SubmitBuilder<'bump> {
-    scratch: &'bump bumpalo::Bump,
-    submits: BumpVec<'bump, VkSubmitInfo<'bump, Null>>,
-    wait: BumpVec<'bump, Ref<'bump, VkSemaphore>>,
-    masks: BumpVec<'bump, PipelineStageFlags>,
-    commands: BumpVec<'bump, Mut<'bump, VkCommandBuffer>>,
-    signal: BumpVec<'bump, Ref<'bump, VkSemaphore>>,
-}
+    // Also Present.
 
-impl<'bump> SubmitBuilder<'bump> {
+    pub fn command(&mut self, command: CommandBuffer<'s>) {
+        if !self.signal.is_empty() {
+            self.advance()
+        }
+        self.commands.push(command.into_handle());
+    }
+    pub fn signal<'sem: 's>(
+        &mut self, semaphore: &'sem mut Semaphore<'sem>,
+    ) -> SignalledSemaphore<'sem> {
+        self.signal.push(semaphore.handle());
+        semaphore.to_signalled()
+    }
+    pub fn wait(
+        &mut self, semaphore: SignalledSemaphore<'s>, mask: PipelineStageFlags,
+    ) {
+        if !self.commands.is_empty() || !self.signal.is_empty() {
+            self.advance()
+        }
+        self.wait.push(semaphore.into_handle());
+        self.masks.push(mask);
+    }
+
     fn advance(&mut self) {
         fn take<'b, T>(
             vec: &mut bumpalo::collections::Vec<'b, T>, bump: &'b bumpalo::Bump,
@@ -202,24 +225,6 @@ impl<'bump> SubmitBuilder<'bump> {
             signal_semaphores: take(&mut self.signal, self.scratch).into(),
             ..Default::default()
         });
-    }
-    fn add_wait(
-        &mut self, wait: Ref<'bump, VkSemaphore>, mask: PipelineStageFlags,
-    ) {
-        if !self.commands.is_empty() || !self.signal.is_empty() {
-            self.advance()
-        }
-        self.wait.push(wait);
-        self.masks.push(mask);
-    }
-    fn add_command(&mut self, command: Mut<'bump, VkCommandBuffer>) {
-        if !self.signal.is_empty() {
-            self.advance()
-        }
-        self.commands.push(command);
-    }
-    fn add_signal(&mut self, signal: Ref<'bump, VkSemaphore>) {
-        self.signal.push(signal);
     }
 }
 

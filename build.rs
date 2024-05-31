@@ -7,10 +7,9 @@
 // except according to those terms.
 
 use std::env;
-use std::path::Path;
 
 fn main() {
-    let dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let _dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     #[cfg(target_arch = "x86")]
     {
         println!(

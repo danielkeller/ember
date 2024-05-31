@@ -171,7 +171,7 @@ fn upload_data(
         dst_access_mask,
     );
     let mut transfer = transfer.end()?;
-    queue.scope(|s| s.submit([vk::Submit::Command(&mut transfer)]));
+    queue.submit(|s| s.command(&mut transfer));
     Ok(())
 }
 
@@ -238,7 +238,7 @@ fn upload_image(
         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     );
     let mut transfer = transfer.end()?;
-    queue.scope(|s| s.submit([vk::Submit::Command(&mut transfer)]));
+    queue.submit(|s| s.command(&mut transfer));
     Ok(())
 }
 
@@ -737,15 +737,10 @@ async fn main_loop() -> anyhow::Result<()> {
         pass.draw_indexed(6, 1, 0, 0, 0)?;
         let mut buf = pass.end()?.end()?;
 
-        queue.scope(|s| {
-            s.submit([
-                vk::Submit::Wait(
-                    &acquire_sem,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                ),
-                vk::Submit::Command(&mut buf),
-                vk::Submit::Signal(present_sem),
-            ]);
+        let present_signal = queue.submit(|s| {
+            s.wait(acquire_sem, vk::PipelineStageFlags::TOP_OF_PIPE);
+            s.command(buf);
+            s.signal(&mut present_sem)
         });
         swapchain_images.present(&mut queue, img, present_sem)?;
     }
@@ -757,7 +752,7 @@ impl std::task::Wake for Waker {
 }
 
 struct App<F> {
-    fut: Pin<F>,
+    fut: Pin<&mut F>,
 }
 
 scoped_thread_local!(static EVENT_LOOP: ActiveEventLoop);
@@ -783,14 +778,13 @@ async fn winit_event(f: impl Fn(&WindowEvent) -> bool) -> WindowEvent {
 
 impl<F> winit::application::ApplicationHandler<()> for App<F>
 where
-    F: DerefMut,
-    <F as Deref>::Target: Future<Output = ()>,
+    F: Future<Output = ()>,
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let waker = Arc::new(Waker).into();
         EVENT_LOOP.set(event_loop, || {
             if let Poll::Ready(()) =
-                self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+                self.fut.poll(&mut Context::from_waker(&waker))
             {
                 event_loop.exit();
             }
@@ -805,7 +799,7 @@ where
         EVENT_LOOP.set(event_loop, || {
             WINDOW_EVENT.replace(Some(event));
             if let Poll::Ready(()) =
-                self.fut.as_mut().poll(&mut Context::from_waker(&waker))
+                self.fut.poll(&mut Context::from_waker(&waker))
             {
                 event_loop.exit();
             }

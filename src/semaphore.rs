@@ -6,28 +6,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::cleanup_queue::Cleanup;
 use crate::device::Device;
 use crate::error::Result;
-use crate::image::Image;
 use crate::types::*;
+
+// Preventing double-signals requires knowing when things will run, so we don't
+// try to.
 
 /// A
 #[doc = crate::spec_link!("semaphore", "7", "synchronization-semaphores")]
 pub struct Semaphore<'d> {
-    pub(crate) signaller: Option<SemaphoreSignaller<'d>>,
-    pub(crate) inner: Arc<SemaphoreRAII<'d>>,
-}
-
-#[derive(Debug)]
-pub(crate) enum SemaphoreSignaller<'d> {
-    Swapchain(Arc<Image<'d>>),
-    Queue(Cleanup),
-}
-
-pub(crate) struct SemaphoreRAII<'d> {
     handle: Handle<VkSemaphore>,
     device: &'d Device<'d>,
+}
+
+pub struct SignalledSemaphore<'a> {
+    handle: Ref<'a, VkSemaphore>,
 }
 
 impl<'d> Semaphore<'d> {
@@ -42,13 +36,15 @@ impl<'d> Semaphore<'d> {
                 &mut handle,
             )?;
         }
-        Ok(Self {
-            signaller: None,
-            inner: Arc::new(SemaphoreRAII { handle: handle.unwrap(), device }),
-        })
+        Ok(Self { handle: handle.unwrap(), device })
+    }
+
+    pub(crate) fn to_signalled(&self) -> SignalledSemaphore {
+        SignalledSemaphore { handle: self.handle() }
     }
 }
 
+#[cfg(any())]
 impl Drop for Semaphore<'_> {
     /// **Warning:** If a semaphore is passed to
     /// [`SwapchainKHR::acquire_next_image`](crate::vk::ext::SwapchainKHR::acquire_next_image())
@@ -70,7 +66,7 @@ impl Drop for Semaphore<'_> {
     }
 }
 
-impl Drop for SemaphoreRAII<'_> {
+impl Drop for Semaphore<'_> {
     fn drop(&mut self) {
         unsafe {
             (self.device.fun.destroy_semaphore)(
@@ -85,20 +81,16 @@ impl Drop for SemaphoreRAII<'_> {
 impl Semaphore<'_> {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkSemaphore> {
-        self.inner.handle.borrow()
+        self.handle.borrow()
     }
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkSemaphore> {
-        // Safe because the outer structure is mutably borrowed, and handle is
-        // private.
-        unsafe { self.inner.handle.borrow_mut_unchecked() }
+        self.handle.borrow_mut()
     }
+}
 
-    /// Panics if there is no signaller
-    pub(crate) fn take_signaller(&mut self) -> Arc<dyn Send + Sync + '_> {
-        match self.signaller.take().unwrap() {
-            SemaphoreSignaller::Queue(cleanup) => Arc::new(cleanup.raii()),
-            SemaphoreSignaller::Swapchain(image) => image,
-        }
+impl<'a> SignalledSemaphore<'a> {
+    pub fn into_handle(self) -> Ref<'a, VkSemaphore> {
+        self.handle
     }
 }

@@ -314,9 +314,14 @@ impl<'pool> CommandPool<'pool> {
     */
 }
 
-impl CommandBuffer<'_> {
+impl<'a> CommandBuffer<'a> {
     pub fn handle_mut(&mut self) -> Mut<VkCommandBuffer> {
         self.0.reborrow_mut()
+    }
+
+    // Just get rid of the type?
+    pub fn into_handle(self) -> Mut<'a, VkCommandBuffer> {
+        self.0
     }
 }
 impl SecondaryCommandBuffer<'_> {
