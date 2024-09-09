@@ -186,6 +186,7 @@ where
 
 fn test_the_scope() {
     let mut vs = [(), ()];
+    let v1 = ();
     loop_scope(&mut vs, |s, v| {
         s.run_mut(v);
     });

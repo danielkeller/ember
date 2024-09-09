@@ -141,6 +141,7 @@ impl<'a, T: Copy> Mut<'a, T> {
         Ref { _value: self._value, _lt: PhantomData }
     }
     /// Reborrow as a mutable reference
+    // Is this the right name?
     pub fn reborrow_mut(&mut self) -> Mut<'_, T> {
         Self { ..*self }
     }

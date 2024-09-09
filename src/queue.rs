@@ -7,7 +7,6 @@
 // except according to those terms.
 
 use bumpalo::collections::Vec as BumpVec;
-use std::cell::RefCell;
 use std::fmt::Debug;
 
 use crate::cleanup_queue::CleanupQueue;
@@ -78,7 +77,7 @@ impl Queue<'_> {
 }
 
 pub struct SubmitScope<'env> {
-    handle: RefCell<Mut<'env, VkQueue>>,
+    handle: Mut<'env, VkQueue>,
     device: &'env Device<'env>,
     scratch: &'env bumpalo::Bump,
     submits: BumpVec<'env, VkSubmitInfo<'env, Null>>,
@@ -91,9 +90,7 @@ pub struct SubmitScope<'env> {
 impl Drop for SubmitScope<'_> {
     fn drop(&mut self) {
         if unsafe {
-            (self.device.fun.queue_wait_idle)(
-                self.handle.borrow_mut().reborrow_mut(),
-            )
+            (self.device.fun.queue_wait_idle)(self.handle.reborrow_mut())
         }
         .is_err()
         {
@@ -136,6 +133,9 @@ impl<'d> Queue<'d> {
     /// draining and refilling work queues on the device takes some time.
     pub fn submit_loop<F, T>(&mut self, values: &mut [T], mut f: F)
     where
+        // The "escape condition" on FnMut disallows any captures from being
+        // borrowed by submission, since they must live for 's which outlives
+        // the body.
         F: for<'s> FnMut(&SubmitScope<'s>, &'s mut T) -> bool,
     {
         loop {
@@ -162,17 +162,21 @@ impl<'d> Queue<'d> {
     }
 }
 
-impl<'s> SubmitScope<'s> {
+impl<'scope> SubmitScope<'scope> {
+    pub fn mut_handle(&mut self) -> Mut<VkQueue> {
+        self.handle.reborrow_mut()
+    }
+
     /// Call
     #[doc = crate::man_link!(vkQueueSubmit)]
-    /// immediately with all commands so far.
+    /// immediately with all commands so far (if any).
     pub fn flush(&mut self) {
         self.advance();
 
         if !self.submits.is_empty() {
             unsafe {
                 (self.device.fun.queue_submit)(
-                    self.handle.borrow_mut().reborrow_mut(),
+                    self.handle.reborrow_mut(),
                     self.submits.len() as u32,
                     Array::from_slice(&self.submits),
                     None,
@@ -184,22 +188,21 @@ impl<'s> SubmitScope<'s> {
         }
     }
 
-    // Also Present.
-
-    pub fn command(&mut self, command: CommandBuffer<'s>) {
+    pub fn command(&mut self, command: CommandBuffer<'scope>) {
         if !self.signal.is_empty() {
             self.advance()
         }
         self.commands.push(command.into_handle());
     }
-    pub fn signal<'sem: 's>(
+    pub fn signal<'sem: 'scope>(
         &mut self, semaphore: &'sem mut Semaphore<'sem>,
     ) -> SignalledSemaphore<'sem> {
         self.signal.push(semaphore.handle());
         semaphore.to_signalled()
     }
     pub fn wait(
-        &mut self, semaphore: SignalledSemaphore<'s>, mask: PipelineStageFlags,
+        &mut self, semaphore: SignalledSemaphore<'scope>,
+        mask: PipelineStageFlags,
     ) {
         if !self.commands.is_empty() || !self.signal.is_empty() {
             self.advance()

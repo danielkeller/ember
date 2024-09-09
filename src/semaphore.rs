@@ -15,11 +15,13 @@ use crate::types::*;
 
 /// A
 #[doc = crate::spec_link!("semaphore", "7", "synchronization-semaphores")]
+#[derive(Debug)]
 pub struct Semaphore<'d> {
     handle: Handle<VkSemaphore>,
     device: &'d Device<'d>,
 }
 
+#[derive(Debug)]
 pub struct SignalledSemaphore<'a> {
     handle: Ref<'a, VkSemaphore>,
 }

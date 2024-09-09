@@ -10,13 +10,13 @@ use std::intrinsics::transmute;
 use std::mem::MaybeUninit;
 
 use crate::device::Device;
-use crate::enums::*;
 use crate::error::{Error, Result};
 use crate::ffi::ArrayMut;
 use crate::image::Image;
-use crate::queue::Queue;
-use crate::semaphore::Semaphore;
+use crate::queue::{Queue, SubmitScope};
+use crate::semaphore::{Semaphore, SignalledSemaphore};
 use crate::types::*;
+use crate::{enums::*, semaphore};
 
 use super::khr_surface::SurfaceKHR;
 
@@ -65,6 +65,7 @@ pub struct SwapchainKHR<'i, 'd> {
     fun: SwapchainKHRFn,
     images: Vec<Image<'d>>, // Warning: This lifetime is a lie...
     // Is it ok for 'a to be invariant?
+    semaphores: Vec<Semaphore<'d>>,
     surface: Option<&'d mut SurfaceKHR<'i>>,
     device: &'d Device<'d>,
 }
@@ -75,6 +76,8 @@ pub struct SwapchainImages<'chain> {
     fun: &'chain SwapchainKHRFn,
     device: &'chain Device<'chain>,
     images: &'chain [Image<'chain>], // ... this is the real one.
+    semaphores: Vec<Mut<'chain, VkSemaphore>>,
+    semahpore_num: usize,
 }
 
 impl<'i, 'd> SwapchainKHR<'i, 'd> {
@@ -172,16 +175,29 @@ impl<'i, 'd> SwapchainKHR<'i, 'd> {
                 })
                 .collect()
         };
+        let semaphores =
+            (0..n_images).map(|_| Semaphore::new(device).unwrap()).collect();
 
-        Ok(Self { device, handle, fun, images, surface: Some(surface) })
+        Ok(Self {
+            handle,
+            fun,
+            images,
+            surface: Some(surface),
+            semaphores,
+            device,
+        })
     }
 
-    pub fn images(&mut self) -> SwapchainImages {
+    pub fn images<'chain>(&'chain mut self) -> SwapchainImages<'chain> {
+        let semaphores =
+            self.semaphores.iter_mut().map(|s| s.mut_handle()).collect();
         SwapchainImages {
             handle: self.handle.borrow_mut(),
             fun: &self.fun,
             device: self.device,
             images: &self.images,
+            semaphores,
+            semahpore_num: 0,
         }
     }
 }
@@ -243,8 +259,6 @@ impl<'chain> SwapchainImages<'chain> {
                 other => return Err(other),
             },
         };
-        // ???
-        // signal.signaller = Some(SemaphoreSignaller::Swapchain(image.clone()));
         Ok((index as usize, is_optimal))
     }
 
@@ -256,9 +270,6 @@ impl<'chain> SwapchainImages<'chain> {
         &mut self, queue: &mut Queue, image: usize, wait: &mut Semaphore,
     ) -> Result<ImageOptimality> {
         assert!(image < self.images.len(), "'image' out of bounds");
-        // if wait.signaller.is_none() {
-        //     return Err(Error::InvalidArgument);
-        // }
 
         let res = unsafe {
             (self.fun.queue_present_khr)(
@@ -281,13 +292,45 @@ impl<'chain> SwapchainImages<'chain> {
             },
         };
 
-        // ???
-        // Semaphore signal op
-        // queue.add_resource(wait.take_signaller()); // Always needed?
-        // queue.add_resource(wait.inner.clone());
-        // Actual present
-        // queue.add_resource(Subobject::new(&self.res).erase()); // FIXME
         Ok(is_optimal)
+    }
+}
+
+impl<'scope> SubmitScope<'scope> {
+    pub fn acquire_next_image(
+        &mut self, swapchain: &mut SwapchainImages<'scope>, timeout: u64,
+        wait_mask: PipelineStageFlags,
+    ) -> Result<(usize, ImageOptimality)> {
+        let mut index = 0;
+        swapchain.semahpore_num =
+            (swapchain.semahpore_num + 1) % swapchain.semaphores.len();
+        let semaphore =
+            swapchain.semaphores[swapchain.semahpore_num].reborrow_mut();
+        let res = unsafe {
+            (swapchain.fun.acquire_next_image_khr)(
+                swapchain.device.handle(),
+                swapchain.handle.reborrow_mut(),
+                timeout,
+                Some(semaphore),
+                None,
+                &mut index,
+            )
+        };
+        // self.wait(semaphore, wait_mask);
+        let is_optimal = match res {
+            Ok(()) => ImageOptimality::Optimal,
+            Err(e) => match e.into() {
+                Error::SuboptimalHKR => ImageOptimality::Suboptimal,
+                other => return Err(other),
+            },
+        };
+        Ok((index as usize, is_optimal))
+    }
+
+    pub fn present(
+        &mut self, swapchain: &mut SwapchainImages<'scope>, image: usize,
+        semaphore: SignalledSemaphore<'scope>,
+    ) {
     }
 }
 
