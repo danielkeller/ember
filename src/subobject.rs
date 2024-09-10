@@ -16,10 +16,8 @@ use std::sync::{Arc, Weak};
 /// multiple WeakSubobjects, which can be upgrade()d to Subobjects.
 pub struct Owner<T: ?Sized>(Arc<UnsafeCell<T>>);
 
-#[derive(Clone)]
 pub struct Subobject<T: ?Sized>(Arc<UnsafeCell<T>>);
 
-#[derive(Clone)]
 pub struct WeakSubobject<T: ?Sized>(Weak<UnsafeCell<T>>);
 
 unsafe impl<T: Send> Send for Owner<T> {}
@@ -73,11 +71,23 @@ impl<T> Subobject<T> {
     // }
 }
 
+impl<T> Clone for Subobject<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
 impl<T: Send + Sync + 'static> Subobject<T> {
     pub fn erase(self) -> Arc<dyn Send + Sync> {
         // Safety: UnsafeCell is repr(transparent)
         // Safety: You can't access the object through dyn Send + Sync
         unsafe { arc_transmute::<UnsafeCell<T>, T>(self.0) }
+    }
+}
+
+impl<T> Clone for WeakSubobject<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 

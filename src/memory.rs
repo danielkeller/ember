@@ -6,29 +6,33 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::marker::PhantomData;
-use std::ptr::NonNull;
-
 use crate::error::{Error, Result};
 use crate::types::*;
 use crate::vk::Device;
 
+#[derive(Debug)]
+pub(crate) struct MemoryInner {
+    handle: Handle<VkDeviceMemory>,
+    device: Device,
+}
+
 /// A piece of
 #[doc = crate::spec_link!("device memory", "11", "memory-device")]
 #[derive(Debug)]
-pub struct DeviceMemory<'d> {
-    handle: Handle<VkDeviceMemory>,
-    device: &'d Device<'d>,
+pub struct DeviceMemory {
+    inner: Arc<MemoryInner>,
+    handle: Mut<'static, VkDeviceMemory>,
     allocation_size: u64,
     memory_type_index: u32,
 }
 
-impl<'d> DeviceMemory<'d> {
+#[allow(clippy::len_without_is_empty)]
+impl DeviceMemory {
     /// Returns [`Error::OutOfBounds`] if no memory type exists with the given
     /// index.
     #[doc = crate::man_link!(vkAllocateMemory)]
     pub fn new(
-        device: &'d Device, allocation_size: u64, memory_type_index: u32,
+        device: &Device, allocation_size: u64, memory_type_index: u32,
     ) -> Result<Self> {
         let mem_types = device.physical_device().memory_properties();
         if memory_type_index >= mem_types.memory_types.len() {
@@ -37,7 +41,7 @@ impl<'d> DeviceMemory<'d> {
         device.increment_memory_alloc_count()?;
         let mut handle = None;
         let result = unsafe {
-            (device.fun.allocate_memory)(
+            (device.fun().allocate_memory)(
                 device.handle(),
                 &MemoryAllocateInfo {
                     stype: Default::default(),
@@ -53,25 +57,27 @@ impl<'d> DeviceMemory<'d> {
             device.decrement_memory_alloc_count();
             result?;
         }
-        Ok(Self {
+        let inner = Arc::new(MemoryInner {
             handle: handle.unwrap(),
-            device,
-            allocation_size,
-            memory_type_index,
-        })
+            device: device.clone(),
+        });
+        let handle = unsafe {
+            inner.handle.borrow_mut_unchecked().reborrow_mut_unchecked()
+        };
+        Ok(Self { inner, handle, allocation_size, memory_type_index })
     }
 
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkDeviceMemory> {
-        self.handle.borrow()
+        self.handle.reborrow()
     }
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkDeviceMemory> {
-        self.handle.borrow_mut()
+        self.handle.reborrow_mut()
     }
     /// Returns the associated device.
     pub fn device(&self) -> &Device {
-        self.device
+        &self.inner.device
     }
     /// Returns the size of the memory in bytes.
     pub fn len(&self) -> u64 {
@@ -85,12 +91,16 @@ impl<'d> DeviceMemory<'d> {
             && !overflow
             && end <= self.allocation_size
     }
+
+    pub(crate) fn inner(&self) -> Arc<MemoryInner> {
+        self.inner.clone()
+    }
 }
 
-impl Drop for DeviceMemory<'_> {
+impl Drop for MemoryInner {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.free_memory)(
+            (self.device.fun().free_memory)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -101,35 +111,16 @@ impl Drop for DeviceMemory<'_> {
 }
 
 /// A [`DeviceMemory`] which has been mapped and can be written to
-pub struct MappedMemory<'mem> {
-    memory: &'mem DeviceMemory<'mem>,
+pub struct MappedMemory {
+    memory: DeviceMemory,
     size: usize,
-    ptr: NonNull<u8>,
+    ptr: *mut u8,
 }
 
-/// A structure for copying data out of mapped memory. Implements
-/// [`std::io::Read`].
-pub struct MemoryRead<'a> {
-    ptr: NonNull<u8>,
-    end: *const u8,
-    _lt: PhantomData<&'a ()>,
-}
-/// A structure for copying data into mapped memory. Implements
-/// [`std::io::Write`].
-pub struct MemoryWrite<'a> {
-    ptr: NonNull<u8>,
-    end: *const u8,
-    _lt: PhantomData<&'a ()>,
-}
-
-#[allow(clippy::len_without_is_empty)]
-impl<'d> DeviceMemory<'d> {
+impl DeviceMemory {
     /// Map the memory so it can be written to. Returns [`Error::OutOfBounds`] if
-    /// `offset` and `size` are out of bounds. Currently, memory cannot be mapped
-    /// or unmapped while buffers are bound to it.
-    pub fn map<'mem>(
-        &'mem mut self, offset: u64, size: usize,
-    ) -> Result<MappedMemory<'mem>> {
+    /// `offset` and `size` are out of bounds.
+    pub fn map(mut self, offset: u64, size: usize) -> Result<MappedMemory> {
         let (end, overflow) = offset.overflowing_add(size as u64);
         if overflow || end > self.allocation_size || size > isize::MAX as usize
         {
@@ -137,141 +128,59 @@ impl<'d> DeviceMemory<'d> {
         }
         let mut ptr = std::ptr::null_mut();
         unsafe {
-            (self.device.fun.map_memory)(
-                self.device.handle(),
-                self.handle.borrow_mut(),
+            (self.inner.device.fun().map_memory)(
+                self.inner.device.handle(),
+                self.handle.reborrow_mut(),
                 offset,
                 size as u64,
                 Default::default(),
                 &mut ptr,
             )?;
         }
-        Ok(MappedMemory { memory: self, size, ptr: NonNull::new(ptr).unwrap() })
+        Ok(MappedMemory { memory: self, size, ptr })
     }
 }
 
-impl Drop for MappedMemory<'_> {
-    /// Unmaps the memory.
-    fn drop(&mut self) {
+impl std::ops::Deref for MappedMemory {
+    type Target = DeviceMemory;
+    fn deref(&self) -> &Self::Target {
+        &self.memory
+    }
+}
+
+impl std::ops::DerefMut for MappedMemory {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.memory
+    }
+}
+
+impl MappedMemory {
+    pub fn unmap(mut self) -> DeviceMemory {
         unsafe {
-            (self.memory.device.fun.unmap_memory)(
-                self.memory.device.handle(),
-                // Safety: 'memory' is mutably borrowed by the call to 'map()'
-                self.memory.handle.borrow_mut_unchecked(),
+            (self.inner.device.fun().unmap_memory)(
+                self.memory.inner.device.handle(),
+                self.memory.handle.reborrow_mut(),
             )
         }
-    }
-}
-
-impl<'mem> MappedMemory<'mem> {
-    pub fn memory(&self) -> &'mem DeviceMemory<'mem> {
         self.memory
     }
 
-    pub fn unmap(self) {}
-
     /// Read the memory's contents. It may be garbage (although it won't be
-    /// uninitialized). If `offset` is out of bounds, the result will be empty.
+    /// uninitialized).
     #[inline]
-    pub fn read_at(&self, offset: usize) -> MemoryRead {
-        unsafe {
-            let ptr = self.ptr.as_ptr().add(offset.min(self.size));
-            MemoryRead {
-                ptr: NonNull::new_unchecked(ptr),
-                end: self.ptr.as_ptr().add(self.size),
-                _lt: PhantomData,
-            }
-        }
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.size) }
     }
 
-    /// Write to the memory. If `offset` is out of bounds, the result will be
-    /// empty.
+    /// Write to the memory.
     #[inline]
-    pub fn write_at(&mut self, offset: usize) -> MemoryWrite {
-        unsafe {
-            let ptr = self.ptr.as_ptr().add(offset.min(self.size));
-            MemoryWrite {
-                ptr: NonNull::new_unchecked(ptr),
-                end: self.ptr.as_ptr().add(self.size),
-                _lt: PhantomData,
-            }
-        }
-    }
-}
-
-impl<'a> std::io::Read for MemoryRead<'a> {
-    #[inline]
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        unsafe {
-            let size = self.end.offset_from(self.ptr.as_ptr()) as usize;
-            let count = size.min(buf.len());
-            std::ptr::copy_nonoverlapping(
-                self.ptr.as_ptr(),
-                buf.as_mut_ptr(),
-                count,
-            );
-            self.ptr = NonNull::new_unchecked(self.ptr.as_ptr().add(count));
-            Ok(count)
-        }
-    }
-    #[inline]
-    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
-        unsafe {
-            let size = self.end.offset_from(self.ptr.as_ptr()) as usize;
-            buf.reserve_exact(size);
-            std::ptr::copy_nonoverlapping(
-                self.ptr.as_ptr(),
-                buf.spare_capacity_mut().as_mut_ptr() as *mut u8,
-                size,
-            );
-            buf.set_len(buf.len() + size);
-            Ok(size)
-        }
-    }
-}
-
-impl<'a> std::io::Write for MemoryWrite<'a> {
-    #[inline]
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        unsafe {
-            let size = self.end.offset_from(self.ptr.as_ptr()) as usize;
-            let count = size.min(buf.len());
-            std::ptr::copy_nonoverlapping(
-                buf.as_ptr(),
-                self.ptr.as_ptr(),
-                count,
-            );
-            self.ptr = NonNull::new_unchecked(self.ptr.as_ptr().add(count));
-            Ok(count)
-        }
-    }
-    /// Returns an error of kind [`std::io::ErrorKind::WriteZero`] if not all
-    /// the bytes could be written.
-    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        if self.write(buf)? == buf.len() {
-            Ok(())
-        } else {
-            Err(std::io::ErrorKind::WriteZero.into())
-        }
-    }
-
-    /// Does nothing.
-    #[inline]
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+    pub fn as_slice_mut(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.size) }
     }
 }
 
 // Access to ptr is properly controlled with borrows
-unsafe impl Send for MappedMemory<'_> {}
-unsafe impl Sync for MappedMemory<'_> {}
-impl std::panic::UnwindSafe for MappedMemory<'_> {}
-impl std::panic::RefUnwindSafe for MappedMemory<'_> {}
-unsafe impl<'a> Send for MemoryRead<'a> {}
-unsafe impl<'a> Sync for MemoryRead<'a> {}
-impl<'a> std::panic::UnwindSafe for MemoryRead<'a> {}
-impl<'a> std::panic::RefUnwindSafe for MemoryRead<'a> {}
-unsafe impl<'a> Send for MemoryWrite<'a> {}
-unsafe impl<'a> Sync for MemoryWrite<'a> {}
-impl<'a> std::panic::UnwindSafe for MemoryWrite<'a> {}
-impl<'a> std::panic::RefUnwindSafe for MemoryWrite<'a> {}
+unsafe impl Send for MappedMemory {}
+unsafe impl Sync for MappedMemory {}
+impl std::panic::UnwindSafe for MappedMemory {}
+impl std::panic::RefUnwindSafe for MappedMemory {}

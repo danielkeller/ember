@@ -13,14 +13,13 @@ use crate::ffi::ArrayMut;
 use crate::instance::Instance;
 use crate::types::*;
 
-/// A physical device. It is not freed separately from the instance and so can
-/// be freely cloned.
+/// A physical device.
 ///
 /// Returned from [`Instance::enumerate_physical_devices`]
-#[derive(Debug, Clone, Copy)]
-pub struct PhysicalDevice<'i> {
-    handle: Ref<'i, VkPhysicalDevice>,
-    instance: &'i Instance,
+#[derive(Debug, Clone)]
+pub struct PhysicalDevice {
+    handle: Ref<'static, VkPhysicalDevice>,
+    instance: Instance,
 }
 
 impl Instance {
@@ -32,13 +31,13 @@ impl Instance {
         let mut len = 0;
         let mut result = Vec::new();
         unsafe {
-            (self.fun.enumerate_physical_devices)(
+            (self.fun().enumerate_physical_devices)(
                 self.handle(),
                 &mut len,
                 None,
             )?;
             result.reserve(len as usize);
-            (self.fun.enumerate_physical_devices)(
+            (self.fun().enumerate_physical_devices)(
                 self.handle(),
                 &mut len,
                 ArrayMut::from_slice(result.spare_capacity_mut()),
@@ -52,23 +51,23 @@ impl Instance {
     }
 }
 
-impl<'i> PhysicalDevice<'i> {
+impl PhysicalDevice {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkPhysicalDevice> {
         self.handle
     }
     /// Gets the instance.
-    pub fn instance(&self) -> &'i Instance {
+    pub fn instance(&self) -> &Instance {
         &self.instance
     }
 }
 
-impl PhysicalDevice<'_> {
+impl PhysicalDevice {
     #[doc = crate::man_link!(vkGetPhysicalDeviceProperties)]
     pub fn properties(&self) -> PhysicalDeviceProperties {
         let mut result = MaybeUninit::uninit();
         unsafe {
-            (self.instance.fun.get_physical_device_properties)(
+            (self.instance.fun().get_physical_device_properties)(
                 self.handle(),
                 &mut result,
             );
@@ -81,13 +80,13 @@ impl PhysicalDevice<'_> {
         let mut len = 0;
         let mut result = Vec::new();
         unsafe {
-            (self.instance.fun.get_physical_device_queue_family_properties)(
+            (self.instance.fun().get_physical_device_queue_family_properties)(
                 self.handle(),
                 &mut len,
                 None,
             );
             result.reserve(len as usize);
-            (self.instance.fun.get_physical_device_queue_family_properties)(
+            (self.instance.fun().get_physical_device_queue_family_properties)(
                 self.handle(),
                 &mut len,
                 ArrayMut::from_slice(result.spare_capacity_mut()),
@@ -101,7 +100,7 @@ impl PhysicalDevice<'_> {
     pub fn memory_properties(&self) -> PhysicalDeviceMemoryProperties {
         let mut result = Default::default();
         unsafe {
-            (self.instance.fun.get_physical_device_memory_properties)(
+            (self.instance.fun().get_physical_device_memory_properties)(
                 self.handle(),
                 &mut result,
             );
@@ -116,14 +115,14 @@ impl PhysicalDevice<'_> {
         let mut len = 0;
         let mut result = Vec::new();
         unsafe {
-            (self.instance.fun.enumerate_device_extension_properties)(
+            (self.instance.fun().enumerate_device_extension_properties)(
                 self.handle(),
                 None,
                 &mut len,
                 None,
             )?;
             result.reserve(len as usize);
-            (self.instance.fun.enumerate_device_extension_properties)(
+            (self.instance.fun().enumerate_device_extension_properties)(
                 self.handle(),
                 None,
                 &mut len,

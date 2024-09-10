@@ -13,7 +13,7 @@ use crate::device::Device;
 use crate::enums::*;
 use crate::error::{Error, Result};
 use crate::exclusive::Exclusive;
-use crate::framebuffer::Framebuffer;
+use crate::image::Framebuffer;
 use crate::pipeline::Pipeline;
 use crate::render_pass::RenderPass;
 use crate::types::*;
@@ -26,19 +26,14 @@ mod draw;
 
 // TODO: CommandPoolSet, with reset(&mut self) and record(&self) -> CommandPool
 
+/// An object which owns a [CommandPool].
 #[derive(Debug)]
-struct PoolInner {
+pub struct CommandPoolLifetime {
     handle: Handle<VkCommandPool>,
     buffers: Vec<Handle<VkCommandBuffer>>,
     free_buffers: Vec<usize>,
     scratch: Exclusive<bumpalo::Bump>,
-}
-
-/// An object which owns a [CommandPool].
-#[derive(Debug)]
-pub struct CommandPoolLifetime<'d> {
-    inner: PoolInner,
-    device: &'d Device<'d>,
+    device: Device,
 }
 
 /// A
@@ -46,9 +41,7 @@ pub struct CommandPoolLifetime<'d> {
 /// , which can be recorded on.
 #[derive(Debug)]
 pub struct CommandPool<'pool> {
-    // Split up to keep 'pool covariant
-    inner: &'pool mut PoolInner,
-    device: &'pool Device<'pool>,
+    inner: &'pool mut CommandPoolLifetime,
 }
 
 /// A primary command buffer.
@@ -62,15 +55,15 @@ pub struct CommandBuffer<'pool>(Mut<'pool, VkCommandBuffer>);
 #[derive(Debug)]
 pub struct SecondaryCommandBuffer<'pool> {
     buf: Mut<'pool, VkCommandBuffer>,
-    pass: Option<&'pool RenderPass<'pool>>,
+    pass: Option<&'pool RenderPass>,
     subpass: u32,
 }
 
 #[derive(Debug)]
 struct Bindings<'a> {
-    layout: bumpalo::collections::Vec<'a, &'a DescriptorSetLayout<'a>>,
+    layout: bumpalo::collections::Vec<'a, &'a DescriptorSetLayout>,
     inited: bumpalo::collections::Vec<'a, bool>,
-    pipeline: Option<&'a Pipeline<'a>>,
+    pipeline: Option<&'a Pipeline>,
 }
 
 // TODO: Use deref to make this less repetitive?
@@ -79,7 +72,7 @@ struct Bindings<'a> {
 #[derive(Debug)]
 pub struct CommandRecording<'rec, 'pool: 'rec> {
     buffer: CommandBuffer<'pool>,
-    device: &'rec Device<'rec>,
+    device: &'rec Device,
     scratch: &'rec bumpalo::Bump,
     graphics: Bindings<'rec>,
     compute: Bindings<'rec>,
@@ -90,7 +83,7 @@ pub struct CommandRecording<'rec, 'pool: 'rec> {
 #[derive(Debug)]
 pub struct RenderPassRecording<'rec, 'pool> {
     rec: CommandRecording<'rec, 'pool>,
-    pass: &'rec RenderPass<'pool>, // I think...
+    pass: &'pool RenderPass,
     subpass: u32,
 }
 
@@ -100,7 +93,7 @@ pub struct RenderPassRecording<'rec, 'pool> {
 #[derive(Debug)]
 pub struct ExternalRenderPassRecording<'rec, 'pool> {
     rec: CommandRecording<'rec, 'pool>,
-    pass: Arc<RenderPass<'rec>>,
+    pass: Arc<RenderPass>,
     subpass: u32,
 }
 
@@ -108,21 +101,21 @@ pub struct ExternalRenderPassRecording<'rec, 'pool> {
 #[derive(Debug)]
 pub struct SecondaryCommandRecording<'rec, 'pool> {
     rec: CommandRecording<'rec, 'pool>,
-    pass: Arc<RenderPass<'rec>>,
+    pass: Arc<RenderPass>,
     subpass: u32,
 }
 
-impl<'d> CommandPoolLifetime<'d> {
+impl CommandPoolLifetime {
     /// Create a command pool. The pool is not transient, not protected, and its
     /// buffers cannot be individually reset.
     #[doc = crate::man_link!(vkCreateCommandPool)]
-    pub fn new(device: &'d Device, queue_family_index: u32) -> Result<Self> {
+    pub fn new(device: &Device, queue_family_index: u32) -> Result<Self> {
         if !device.has_queue(queue_family_index, 1) {
             return Err(Error::OutOfBounds);
         }
         let mut handle = None;
         unsafe {
-            (device.fun.create_command_pool)(
+            (device.fun().create_command_pool)(
                 device.handle(),
                 &CommandPoolCreateInfo {
                     queue_family_index,
@@ -135,37 +128,35 @@ impl<'d> CommandPoolLifetime<'d> {
         let handle = handle.unwrap();
 
         Ok(CommandPoolLifetime {
-            inner: PoolInner {
-                handle,
-                buffers: Default::default(),
-                free_buffers: Default::default(),
-                scratch: Default::default(),
-            },
-            device,
+            handle,
+            buffers: Default::default(),
+            free_buffers: Default::default(),
+            scratch: Default::default(),
+            device: device.clone(),
         })
     }
 }
 
-impl Drop for CommandPoolLifetime<'_> {
+impl Drop for CommandPoolLifetime {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_command_pool)(
+            (self.device.fun().destroy_command_pool)(
                 self.device.handle(),
-                self.inner.handle.borrow_mut(),
+                self.handle.borrow_mut(),
                 None,
             )
         }
     }
 }
 
-impl PoolInner {
-    fn reserve(&mut self, device: &Device, additional: u32) {
+impl CommandPoolLifetime {
+    fn reserve(&mut self, additional: u32) {
         self.buffers.reserve(additional as usize);
         let old_len = self.buffers.len();
         let new_len = old_len + additional as usize;
         unsafe {
-            (device.fun.allocate_command_buffers)(
-                device.handle(),
+            (self.device.fun().allocate_command_buffers)(
+                self.device.handle(),
                 &CommandBufferAllocateInfo {
                     stype: Default::default(),
                     next: Default::default(),
@@ -181,38 +172,32 @@ impl PoolInner {
         }
         self.free_buffers.extend(old_len..new_len);
     }
-}
 
-impl CommandPoolLifetime<'_> {
     /// Borrows the inner Vulkan handle.
     pub fn handle_mut(&mut self) -> Mut<VkCommandPool> {
-        self.inner.handle.borrow_mut()
+        self.handle.borrow_mut()
     }
 
     fn len(&self) -> usize {
-        self.inner.buffers.len()
-    }
-
-    fn reserve(&mut self, additional: u32) {
-        self.inner.reserve(self.device, additional)
+        self.buffers.len()
     }
 }
 
-impl<'d> CommandPoolLifetime<'d> {
+impl CommandPoolLifetime {
     /// Resets the pool and adds all command buffers to the free list.
     #[doc = crate::man_link!(vkResetCommandPool)]
     pub fn reset<'pool>(&'pool mut self) -> Result<CommandPool<'pool>> {
         unsafe {
-            (self.device.fun.reset_command_pool)(
+            (self.device.fun().reset_command_pool)(
                 self.device.handle(),
-                self.inner.handle.borrow_mut(),
+                self.handle.borrow_mut(),
                 Default::default(),
             )?;
         }
-        self.inner.free_buffers.clear();
-        self.inner.free_buffers.extend(0..self.len());
-        self.inner.scratch.get_mut().reset();
-        Ok(CommandPool { inner: &mut self.inner, device: self.device })
+        self.free_buffers.clear();
+        self.free_buffers.extend(0..self.len());
+        self.scratch.get_mut().reset();
+        Ok(CommandPool { inner: self })
     }
 }
 
@@ -222,7 +207,7 @@ impl<'pool> CommandPool<'pool> {
     #[doc = crate::man_link!(vkBeginCommandBuffer)]
     pub fn begin<'rec>(&'rec mut self) -> CommandRecording<'rec, 'pool> {
         if self.inner.free_buffers.is_empty() {
-            self.inner.reserve(self.device, 1)
+            self.inner.reserve(1)
         }
         let buffer = self.inner.free_buffers.pop().unwrap();
         // Safety: Moving the Handle<> doesn't actually invalidate the reference.
@@ -230,7 +215,7 @@ impl<'pool> CommandPool<'pool> {
             self.inner.buffers[buffer].borrow_mut().reborrow_mut_unchecked()
         };
         unsafe {
-            (self.device.fun.begin_command_buffer)(
+            (self.inner.device.fun().begin_command_buffer)(
                 buffer.reborrow_mut(),
                 &CommandBufferBeginInfo {
                     flags: CommandBufferUsageFlags::ONE_TIME_SUBMIT,
@@ -242,7 +227,7 @@ impl<'pool> CommandPool<'pool> {
         let scratch = self.inner.scratch.get_mut();
         CommandRecording {
             buffer: CommandBuffer(buffer),
-            device: self.device,
+            device: &self.inner.device,
             scratch,
             graphics: Bindings::new(scratch),
             compute: Bindings::new(scratch),
@@ -344,7 +329,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkEndCommandBuffer)]
     pub fn end(mut self) -> Result<CommandBuffer<'pool>> {
         unsafe {
-            (self.device.fun.end_command_buffer)(self.buffer.handle_mut())?;
+            (self.device.fun().end_command_buffer)(self.buffer.handle_mut())?;
         }
         Ok(self.buffer)
     }
@@ -362,7 +347,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     /// if `framebuffer` and `render_pass` are not compatible.
     #[doc = crate::man_link!(vkCmdBeginRenderPass)]
     pub fn begin_render_pass(
-        mut self, render_pass: &'pool RenderPass<'pool>,
+        mut self, render_pass: &'pool RenderPass,
         framebuffer: &'pool Framebuffer, render_area: &Rect2D,
         clear_values: &[ClearValue],
     ) -> Result<RenderPassRecording<'rec, 'pool>> {
@@ -378,7 +363,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
             clear_values: clear_values.into(),
         };
         unsafe {
-            (self.device.fun.cmd_begin_render_pass)(
+            (self.device.fun().cmd_begin_render_pass)(
                 self.buffer.handle_mut(),
                 &info,
                 SubpassContents::INLINE,
@@ -451,7 +436,7 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
         }
         self.subpass += 1;
         unsafe {
-            (self.rec.device.fun.cmd_next_subpass)(
+            (self.rec.device.fun().cmd_next_subpass)(
                 self.rec.buffer.handle_mut(),
                 SubpassContents::INLINE,
             )
@@ -488,7 +473,7 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
             return Err(Error::InvalidState);
         }
         unsafe {
-            (self.rec.device.fun.cmd_end_render_pass)(
+            (self.rec.device.fun().cmd_end_render_pass)(
                 self.rec.buffer.handle_mut(),
             );
         }

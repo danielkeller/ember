@@ -14,16 +14,16 @@ use crate::types::*;
 /// A
 #[doc = crate::spec_link!("render pass", "8", "renderpass")]
 #[derive(Debug)]
-pub struct RenderPass<'d> {
+pub struct RenderPass {
     handle: Handle<VkRenderPass>,
     pub(crate) compat: RenderPassCompat,
-    pub(crate) device: &'d Device<'d>,
+    pub(crate) device: Device,
 }
 
-impl<'d> RenderPass<'d> {
+impl RenderPass {
     #[doc = crate::man_link!(vkCreateRenderPass)]
     pub fn new(
-        device: &'d Device, info: &RenderPassCreateInfo,
+        device: &Device, info: &RenderPassCreateInfo,
     ) -> Result<Arc<Self>> {
         for subpass in info.subpasses {
             if subpass.color_attachments.len()
@@ -35,7 +35,7 @@ impl<'d> RenderPass<'d> {
         let compat = RenderPassCompat::new(info)?;
         let mut handle = None;
         unsafe {
-            (device.fun.create_render_pass)(
+            (device.fun().create_render_pass)(
                 device.handle(),
                 info,
                 None,
@@ -43,7 +43,7 @@ impl<'d> RenderPass<'d> {
             )?;
         }
         let handle = handle.unwrap();
-        Ok(Arc::new(Self { handle, compat, device }))
+        Ok(Arc::new(Self { handle, compat, device: device.clone() }))
     }
 
     /// Borrows the inner Vulkan handle.
@@ -56,7 +56,7 @@ impl<'d> RenderPass<'d> {
     }
     /// Returns the associated device.
     pub fn device(&self) -> &Device {
-        self.device
+        &self.device
     }
     /// Returns true if this render pass is compatible with `other`
     pub fn compatible(&self, other: &Self) -> bool {
@@ -64,10 +64,10 @@ impl<'d> RenderPass<'d> {
     }
 }
 
-impl Drop for RenderPass<'_> {
+impl Drop for RenderPass {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_render_pass)(
+            (self.device.fun().destroy_render_pass)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,

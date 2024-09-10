@@ -45,7 +45,7 @@ impl<'i> KHRWin32Surface<'i> {
     #[doc = crate::man_link!(vkCreateWin32SurfaceKHR)]
     pub unsafe fn create_win32_surface_ext(
         &self, info: &Win32SurfaceCreateInfoKHR,
-    ) -> Result<SurfaceKHR<'i>> {
+    ) -> Result<SurfaceKHR> {
         let mut handle = None;
         (self.fun.create_win32_surface_khr)(
             self.instance.handle(),
@@ -57,6 +57,7 @@ impl<'i> KHRWin32Surface<'i> {
     }
 }
 
+#[non_exhaustive]
 pub struct Win32SurfaceFn {
     pub get_physical_device_win32_presentation_support_khr:
         unsafe extern "system" fn(Ref<VkPhysicalDevice>, u32) -> Bool,

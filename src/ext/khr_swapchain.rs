@@ -10,13 +10,13 @@ use std::intrinsics::transmute;
 use std::mem::MaybeUninit;
 
 use crate::device::Device;
+use crate::enums::*;
 use crate::error::{Error, Result};
 use crate::ffi::ArrayMut;
 use crate::image::Image;
 use crate::queue::{Queue, SubmitScope};
 use crate::semaphore::{Semaphore, SignalledSemaphore};
 use crate::types::*;
-use crate::{enums::*, semaphore};
 
 use super::khr_surface::SurfaceKHR;
 
@@ -60,58 +60,68 @@ impl<'a> Default for SwapchainCreateInfoKHR<'a> {
 /// A
 #[doc = crate::spec_link!("swapchain", "33", "_wsi_swapchain")]
 #[derive(Debug)]
-pub struct SwapchainKHR<'i, 'd> {
+pub struct SwapchainKHR {
     handle: Handle<VkSwapchainKHR>,
+    device: Device,
     fun: SwapchainKHRFn,
-    images: Vec<Image<'d>>, // Warning: This lifetime is a lie...
-    // Is it ok for 'a to be invariant?
-    semaphores: Vec<Semaphore<'d>>,
-    surface: Option<&'d mut SurfaceKHR<'i>>,
-    device: &'d Device<'d>,
+    images: Vec<Image>,
+    semaphores: Vec<Semaphore>,
+    surface: SurfaceKHR,
 }
 
 // Maybe it would be more conveient to just make Swapchain !Sync.
 pub struct SwapchainImages<'chain> {
     handle: Mut<'chain, VkSwapchainKHR>,
     fun: &'chain SwapchainKHRFn,
-    device: &'chain Device<'chain>,
-    images: &'chain [Image<'chain>], // ... this is the real one.
+    device: &'chain Device,
+    images: &'chain [Image],
     semaphores: Vec<Mut<'chain, VkSemaphore>>,
     semahpore_num: usize,
 }
 
-impl<'i, 'd> SwapchainKHR<'i, 'd> {
+impl SwapchainKHR {
     /// Panics if the extension functions can't be loaded.
     ///
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
     pub fn new(
-        device: &'d Device, surface: &'d mut SurfaceKHR<'i>,
-        info: SwapchainCreateInfoKHR,
+        device: &Device, mut surface: SurfaceKHR, info: &SwapchainCreateInfoKHR,
     ) -> Result<Self> {
-        Self::new_impl(device, surface, SwapchainKHRFn::new(device), None, info)
+        let fun = SwapchainKHRFn::new(device);
+        let handle = Self::create(device, &mut surface, &fun, info, None)?;
+        let mut this = Self {
+            handle,
+            device: device.clone(),
+            fun,
+            images: vec![],
+            semaphores: vec![],
+            surface,
+        };
+        this.new_impl(info)?;
+        Ok(this)
     }
 
     /// The current swapchain is destroyed after the new one is created.
     ///
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
-    pub fn recreate(&mut self, info: SwapchainCreateInfoKHR) -> Result<()> {
+    pub fn recreate(&mut self, info: &SwapchainCreateInfoKHR) -> Result<()> {
         // I think this puts 'self' in a bad state if this fails...
-        let mut new = Self::new_impl(
-            self.device,
-            self.surface.take().unwrap(),
-            SwapchainKHRFn::new(self.device),
-            Some(self.handle.borrow_mut()),
+        let handle = Self::create(
+            &self.device,
+            &mut self.surface,
+            &self.fun,
             info,
+            Some(self.handle.borrow_mut()),
         )?;
-        std::mem::swap(self, &mut new);
-        Ok(())
+        unsafe { self.destroy() };
+        self.handle = handle;
+        self.new_impl(info)
     }
 
-    fn new_impl(
-        device: &'d Device, surface: &'d mut SurfaceKHR<'i>,
-        fun: SwapchainKHRFn, old_swapchain: Option<Mut<'_, VkSwapchainKHR>>,
-        info: SwapchainCreateInfoKHR,
-    ) -> Result<Self> {
+    fn create(
+        device: &Device, surface: &mut SurfaceKHR, fun: &SwapchainKHRFn,
+        info: &SwapchainCreateInfoKHR,
+        old_swapchain: Option<Mut<VkSwapchainKHR>>,
+    ) -> Result<Handle<VkSwapchainKHR>> {
         let mut handle = None;
         unsafe {
             (fun.create_swapchain_khr)(
@@ -139,34 +149,36 @@ impl<'i, 'd> SwapchainKHR<'i, 'd> {
                 &mut handle,
             )?;
         }
-        let handle = handle.unwrap();
+        Ok(handle.unwrap())
+    }
 
+    fn new_impl(&mut self, info: &SwapchainCreateInfoKHR) -> Result<()> {
         let mut n_images = 0;
         let mut images = vec![];
         unsafe {
-            (fun.get_swapchain_images_khr)(
-                device.handle(),
-                handle.borrow(),
+            (self.fun.get_swapchain_images_khr)(
+                self.device.handle(),
+                self.handle.borrow(),
                 &mut n_images,
                 None,
             )?;
             images.reserve(n_images as usize);
-            (fun.get_swapchain_images_khr)(
-                device.handle(),
-                handle.borrow(),
+            (self.fun.get_swapchain_images_khr)(
+                self.device.handle(),
+                self.handle.borrow(),
                 &mut n_images,
                 ArrayMut::from_slice(images.spare_capacity_mut()),
             )?;
             images.set_len(n_images as usize);
         }
 
-        let images = unsafe {
+        self.images = unsafe {
             images
                 .into_iter()
                 .map(|handle| {
                     Image::new_from(
                         handle,
-                        device,
+                        self.device.clone(),
                         info.image_format,
                         info.image_extent.into(),
                         info.image_array_layers,
@@ -175,17 +187,19 @@ impl<'i, 'd> SwapchainKHR<'i, 'd> {
                 })
                 .collect()
         };
-        let semaphores =
-            (0..n_images).map(|_| Semaphore::new(device).unwrap()).collect();
+        self.semaphores.resize_with(n_images as usize, || {
+            Semaphore::new(&self.device).unwrap()
+        });
 
-        Ok(Self {
-            handle,
-            fun,
-            images,
-            surface: Some(surface),
-            semaphores,
-            device,
-        })
+        Ok(())
+    }
+
+    unsafe fn destroy(&mut self) {
+        (self.fun.destroy_swapchain_khr)(
+            self.device.handle(),
+            self.handle.borrow_mut(),
+            None,
+        )
     }
 
     pub fn images<'chain>(&'chain mut self) -> SwapchainImages<'chain> {
@@ -194,7 +208,7 @@ impl<'i, 'd> SwapchainKHR<'i, 'd> {
         SwapchainImages {
             handle: self.handle.borrow_mut(),
             fun: &self.fun,
-            device: self.device,
+            device: &self.device,
             images: &self.images,
             semaphores,
             semahpore_num: 0,
@@ -202,15 +216,9 @@ impl<'i, 'd> SwapchainKHR<'i, 'd> {
     }
 }
 
-impl Drop for SwapchainKHR<'_, '_> {
+impl Drop for SwapchainKHR {
     fn drop(&mut self) {
-        unsafe {
-            (self.fun.destroy_swapchain_khr)(
-                self.device.handle(),
-                self.handle.borrow_mut(),
-                None,
-            )
-        }
+        unsafe { self.destroy() }
     }
 }
 
@@ -227,7 +235,7 @@ impl<'chain> SwapchainImages<'chain> {
         self.handle.reborrow_mut()
     }
 
-    pub fn images(&self) -> &'chain [Image<'chain>] {
+    pub fn images(&self) -> &'chain [Image] {
         &self.images
     }
 
@@ -335,6 +343,7 @@ impl<'scope> SubmitScope<'scope> {
 }
 
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct SwapchainKHRFn {
     pub create_swapchain_khr: unsafe extern "system" fn(
         Ref<VkDevice>,

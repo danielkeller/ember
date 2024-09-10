@@ -11,19 +11,24 @@ use crate::load;
 use crate::load::InstanceFn;
 use crate::types::*;
 
-/// A driver instance.
-pub struct Instance {
+struct Impl {
     handle: Handle<VkInstance>,
-    pub(crate) fun: InstanceFn,
+    fun: InstanceFn,
+}
+
+/// A driver instance.
+#[derive(Clone)]
+pub struct Instance {
+    inner: Arc<Impl>,
 }
 
 impl std::fmt::Debug for Instance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.handle.fmt(f)
+        self.inner.handle.fmt(f)
     }
 }
 
-impl Drop for Instance {
+impl Drop for Impl {
     fn drop(&mut self) {
         unsafe { (self.fun.destroy_instance)(self.handle.borrow_mut(), None) }
     }
@@ -31,7 +36,7 @@ impl Drop for Instance {
 
 impl PartialEq for Instance {
     fn eq(&self, other: &Self) -> bool {
-        self.handle == other.handle
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 impl Eq for Instance {}
@@ -44,10 +49,16 @@ impl Instance {
         unsafe { (load::vk_create_instance())(info, None, &mut handle)? };
         let handle = handle.unwrap();
         let fun = InstanceFn::new(handle.borrow());
-        Ok(Instance { handle, fun })
+        Ok(Instance { inner: Arc::new(Impl { handle, fun }) })
     }
+
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkInstance> {
-        self.handle.borrow()
+        self.inner.handle.borrow()
+    }
+
+    /// Get the instance functions.
+    pub fn fun(&self) -> &InstanceFn {
+        &self.inner.fun
     }
 }

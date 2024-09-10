@@ -8,7 +8,8 @@
 
 use crate::enums::*;
 use crate::error::{Error, Result};
-use crate::memory::DeviceMemory;
+use crate::memory::{DeviceMemory, MemoryInner};
+use crate::render_pass::{RenderPass, RenderPassCompat};
 use crate::types::*;
 use crate::vk::Device;
 
@@ -17,7 +18,7 @@ use std::fmt::Debug;
 /// An image with no memory. Call [`Image::new`] to bind memory and create an
 /// [`Image`].
 #[derive(Debug)]
-pub struct ImageWithoutMemory<'d> {
+pub struct ImageWithoutMemory {
     handle: Handle<VkImage>,
     format: Format,
     extent: Extent3D,
@@ -25,26 +26,65 @@ pub struct ImageWithoutMemory<'d> {
     array_layers: u32,
     usage: ImageUsageFlags,
     owned: bool,
-    device: &'d Device<'d>,
+    device: Device,
+}
+
+#[derive(Debug)]
+struct ImageInner {
+    inner: ImageWithoutMemory,
+    memory: Option<Arc<MemoryInner>>,
 }
 
 /// An
 #[doc = crate::spec_link!("image", "12", "resources-images")]
 /// with memory attached to it.
 #[derive(Debug)]
-pub struct Image<'a>(ImageWithoutMemory<'a>);
+pub struct Image {
+    inner: Arc<ImageInner>,
+}
 
-impl<'a> std::ops::Deref for Image<'a> {
-    type Target = ImageWithoutMemory<'a>;
+#[derive(Debug)]
+struct ImageViewInner {
+    handle: Handle<VkImageView>,
+    image: Image,
+}
+
+/// An
+#[doc = crate::spec_link!("image view", "12", "resources-image-views")]
+#[derive(Debug)]
+pub struct ImageView {
+    inner: Arc<ImageViewInner>,
+}
+
+/// A
+#[doc = crate::spec_link!("framebuffer", "8", "_framebuffers")]
+#[derive(Debug)]
+pub struct Framebuffer {
+    handle: Handle<VkFramebuffer>,
+    render_pass_compat: RenderPassCompat,
+    attachments: Vec<Arc<ImageViewInner>>,
+    device: Device,
+}
+
+impl std::ops::Deref for Image {
+    type Target = ImageWithoutMemory;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.inner.inner
     }
 }
 
-impl<'d> ImageWithoutMemory<'d> {
+impl std::ops::Deref for ImageView {
+    type Target = Image;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner.image
+    }
+}
+
+impl ImageWithoutMemory {
     #[doc = crate::man_link!(vkCreateImage)]
-    pub fn new(device: &'d Device, info: &ImageCreateInfo<'_>) -> Result<Self> {
+    pub fn new(device: &Device, info: &ImageCreateInfo<'_>) -> Result<Self> {
         let max_dim =
             info.extent.width.max(info.extent.height).max(info.extent.depth);
         if (info.image_type == ImageType::_1D
@@ -63,7 +103,7 @@ impl<'d> ImageWithoutMemory<'d> {
         }
         let mut handle = None;
         unsafe {
-            (device.fun.create_image)(
+            (device.fun().create_image)(
                 device.handle(),
                 info,
                 None,
@@ -78,7 +118,7 @@ impl<'d> ImageWithoutMemory<'d> {
             array_layers: info.array_layers,
             usage: info.usage,
             owned: true,
-            device,
+            device: device.clone(),
         })
     }
     /// Borrows the inner Vulkan handle.
@@ -91,7 +131,7 @@ impl<'d> ImageWithoutMemory<'d> {
     }
     /// Returns the associated device.
     pub fn device(&self) -> &Device {
-        self.device
+        &self.device
     }
     /// If [`ImageCreateInfo::usage`] includes a storage image usage type and
     /// the robust buffer access feature was not enabled at device creation, any
@@ -103,7 +143,7 @@ impl<'d> ImageWithoutMemory<'d> {
     pub fn memory_requirements(&self) -> MemoryRequirements {
         let mut result = Default::default();
         unsafe {
-            (self.device.fun.get_image_memory_requirements)(
+            (self.device.fun().get_image_memory_requirements)(
                 self.device.handle(),
                 self.handle.borrow(),
                 &mut result,
@@ -167,11 +207,11 @@ impl<'d> ImageWithoutMemory<'d> {
     }
 }
 
-impl Drop for ImageWithoutMemory<'_> {
+impl Drop for ImageWithoutMemory {
     fn drop(&mut self) {
         if self.owned {
             unsafe {
-                (self.device.fun.destroy_image)(
+                (self.device.fun().destroy_image)(
                     self.device.handle(),
                     self.handle.borrow_mut(),
                     None,
@@ -181,37 +221,38 @@ impl Drop for ImageWithoutMemory<'_> {
     }
 }
 
-impl<'a> Image<'a> {
+impl Image {
     /// Note that it is an error to bind a storage image to host-visible memory
     /// when robust buffer access is not enabled.
     #[doc = crate::man_link!(vkBindImageMemory)]
     pub fn new(
-        mut image: ImageWithoutMemory<'a>, memory: &'a DeviceMemory<'a>,
-        offset: u64,
+        mut image: ImageWithoutMemory, memory: &DeviceMemory, offset: u64,
     ) -> Result<Self> {
-        assert_eq!(memory.device(), image.device);
+        assert_eq!(memory.device(), &image.device);
         if !memory.check(offset, image.memory_requirements()) {
             return Err(Error::InvalidArgument);
         }
 
         unsafe {
-            (memory.device().fun.bind_image_memory)(
-                memory.device().handle(),
-                image.handle_mut(),
+            (image.device.fun().bind_image_memory)(
+                image.device.handle(),
+                image.handle.borrow_mut(),
                 memory.handle(),
                 offset,
             )?;
         }
-        Ok(Self(image))
+        let inner =
+            Arc::new(ImageInner { inner: image, memory: Some(memory.inner()) });
+        Ok(Self { inner })
     }
 
     /// Create an unowned image, for use by the swapchain. The caller must give
     /// the result an appropriate lifetime.
     pub(crate) unsafe fn new_from(
-        handle: Handle<VkImage>, device: &'a Device, format: Format,
+        handle: Handle<VkImage>, device: Device, format: Format,
         extent: Extent3D, array_layers: u32, usage: ImageUsageFlags,
     ) -> Self {
-        Self(ImageWithoutMemory {
+        let inner = ImageWithoutMemory {
             handle,
             device,
             format,
@@ -220,16 +261,15 @@ impl<'a> Image<'a> {
             usage,
             mip_levels: 1,
             owned: false,
-        })
+        };
+        let inner = Arc::new(ImageInner { inner, memory: None });
+        Self { inner }
     }
-}
 
-/// An
-#[doc = crate::spec_link!("image view", "12", "resources-image-views")]
-#[derive(Debug)]
-pub struct ImageView<'a> {
-    handle: Handle<VkImageView>,
-    image: &'a Image<'a>,
+    // Not publicly cloneable for consistency.
+    fn clone(&self) -> Self {
+        Self { inner: self.inner.clone() }
+    }
 }
 
 #[doc = crate::man_link!(VkImageViewCreateInfo)]
@@ -242,11 +282,9 @@ pub struct ImageViewCreateInfo {
     pub subresource_range: ImageSubresourceRange,
 }
 
-impl<'a> ImageView<'a> {
+impl ImageView {
     /// Create an image view of the image.
-    pub fn new(
-        image: &'a Image<'a>, info: &ImageViewCreateInfo,
-    ) -> Result<Self> {
+    pub fn new(image: &Image, info: &ImageViewCreateInfo) -> Result<Self> {
         let vk_info = VkImageViewCreateInfo {
             stype: Default::default(),
             next: Default::default(),
@@ -259,21 +297,25 @@ impl<'a> ImageView<'a> {
         };
         let mut handle = None;
         unsafe {
-            (image.device.fun.create_image_view)(
+            (image.device.fun().create_image_view)(
                 image.device.handle(),
                 &vk_info,
                 None,
                 &mut handle,
             )?;
         }
-        Ok(Self { handle: handle.unwrap(), image })
+        let inner = Arc::new(ImageViewInner {
+            handle: handle.unwrap(),
+            image: image.clone(),
+        });
+        Ok(Self { inner })
     }
 }
 
-impl Drop for ImageView<'_> {
+impl Drop for ImageViewInner {
     fn drop(&mut self) {
         unsafe {
-            (self.image.device().fun.destroy_image_view)(
+            (self.image.device().fun().destroy_image_view)(
                 self.image.device().handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -282,18 +324,79 @@ impl Drop for ImageView<'_> {
     }
 }
 
-impl<'d> ImageView<'d> {
+impl ImageView {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkImageView> {
+        self.inner.handle.borrow()
+    }
+}
+
+impl Framebuffer {
+    #[doc = crate::man_link!(vkCreateFrameuffer)]
+    pub fn new(
+        render_pass: &RenderPass, flags: FramebufferCreateFlags,
+        attachments: &[&ImageView], size: Extent3D,
+    ) -> Result<Self> {
+        for iv in attachments {
+            assert_eq!(iv.device(), render_pass.device());
+        }
+        let lim = render_pass.device().limits();
+        if size.width > lim.max_framebuffer_width
+            || size.height > lim.max_framebuffer_height
+            || size.depth > lim.max_framebuffer_layers
+        {
+            return Err(Error::LimitExceeded);
+        }
+        let vk_attachments: Vec<_> =
+            attachments.iter().map(|iv| iv.handle()).collect();
+        let vk_create_info = VkFramebufferCreateInfo {
+            stype: Default::default(),
+            next: Default::default(),
+            flags,
+            render_pass: render_pass.handle(),
+            attachments: (&vk_attachments).into(),
+            width: size.width,
+            height: size.height,
+            layers: size.depth,
+        };
+        let mut handle = None;
+        unsafe {
+            (render_pass.device().fun().create_framebuffer)(
+                render_pass.device().handle(),
+                &vk_create_info,
+                None,
+                &mut handle,
+            )?;
+        }
+        let attachments =
+            attachments.iter().map(|iv| iv.inner.clone()).collect();
+        Ok(Self {
+            handle: handle.unwrap(),
+            render_pass_compat: render_pass.compat.clone(),
+            attachments,
+            device: render_pass.device().clone(),
+        })
+    }
+
+    /// Borrows the inner Vulkan handle.
+    pub fn handle(&self) -> Ref<VkFramebuffer> {
         self.handle.borrow()
     }
-    /// Returns the associated device.
-    pub fn device(&self) -> &Device {
-        self.image.device()
+    /// Returns true if this framebuffer is compatible with `pass`
+    pub fn is_compatible_with(&self, pass: &RenderPass) -> bool {
+        self.render_pass_compat == pass.compat
     }
-    /// Returns the underlying image
-    pub fn image(&'d self) -> &Image {
-        &self.image
+}
+
+impl Drop for Framebuffer {
+    fn drop(&mut self) {
+        unsafe {
+            (self.device.fun().destroy_framebuffer)(
+                self.device.handle(),
+                self.handle.borrow_mut(),
+                None,
+            )
+        }
     }
 }
 

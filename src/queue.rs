@@ -36,20 +36,20 @@ use crate::vk::PipelineStageFlags;
 /// to another queue in [`SubmitInfo::wait`], (and so on) and on the last queue
 /// one of the first two things is done.
 #[derive(Debug)]
-pub struct Queue<'d> {
+pub struct Queue {
     handle: Handle<VkQueue>,
-    device: &'d Device<'d>,
+    device: Device,
     resources: CleanupQueue,
     scratch: Exclusive<bumpalo::Bump>,
 }
 
-impl Device<'_> {
+impl Device {
     pub(crate) fn queue(
         self: &Self, family_index: u32, queue_index: u32,
     ) -> Queue {
         let mut handle = None;
         unsafe {
-            (self.fun.get_device_queue)(
+            (self.fun().get_device_queue)(
                 self.handle(),
                 family_index,
                 queue_index,
@@ -58,14 +58,14 @@ impl Device<'_> {
         }
         Queue {
             handle: handle.unwrap(),
-            device: self,
+            device: self.clone(),
             resources: CleanupQueue::new(100),
             scratch: Exclusive::new(bumpalo::Bump::new()),
         }
     }
 }
 
-impl Queue<'_> {
+impl Queue {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkQueue> {
         self.handle.borrow()
@@ -78,7 +78,7 @@ impl Queue<'_> {
 
 pub struct SubmitScope<'env> {
     handle: Mut<'env, VkQueue>,
-    device: &'env Device<'env>,
+    device: Device,
     scratch: &'env bumpalo::Bump,
     submits: BumpVec<'env, VkSubmitInfo<'env, Null>>,
     wait: BumpVec<'env, Ref<'env, VkSemaphore>>,
@@ -90,7 +90,7 @@ pub struct SubmitScope<'env> {
 impl Drop for SubmitScope<'_> {
     fn drop(&mut self) {
         if unsafe {
-            (self.device.fun.queue_wait_idle)(self.handle.reborrow_mut())
+            (self.device.fun().queue_wait_idle)(self.handle.reborrow_mut())
         }
         .is_err()
         {
@@ -103,12 +103,12 @@ impl Drop for SubmitScope<'_> {
     }
 }
 
-impl<'d> Queue<'d> {
+impl Queue {
     fn submit_scope(&mut self) -> SubmitScope<'_> {
         let scratch = self.scratch.get_mut();
         SubmitScope {
             handle: self.handle.borrow_mut().into(),
-            device: self.device,
+            device: self.device.clone(),
             scratch,
             submits: bumpalo::vec![in scratch],
             wait: bumpalo::vec![in scratch],
@@ -156,7 +156,9 @@ impl<'d> Queue<'d> {
 
     #[doc = crate::man_link!(vkQueueWaitIdle)]
     pub fn wait_idle(&mut self) -> Result<()> {
-        unsafe { (self.device.fun.queue_wait_idle)(self.handle.borrow_mut())? };
+        unsafe {
+            (self.device.fun().queue_wait_idle)(self.handle.borrow_mut())?
+        };
         self.resources.new_cleanup().cleanup();
         Ok(())
     }
@@ -175,7 +177,7 @@ impl<'scope> SubmitScope<'scope> {
 
         if !self.submits.is_empty() {
             unsafe {
-                (self.device.fun.queue_submit)(
+                (self.device.fun().queue_submit)(
                     self.handle.reborrow_mut(),
                     self.submits.len() as u32,
                     Array::from_slice(&self.submits),
@@ -195,7 +197,7 @@ impl<'scope> SubmitScope<'scope> {
         self.commands.push(command.into_handle());
     }
     pub fn signal<'sem: 'scope>(
-        &mut self, semaphore: &'sem mut Semaphore<'sem>,
+        &mut self, semaphore: &'sem mut Semaphore,
     ) -> SignalledSemaphore<'sem> {
         self.signal.push(semaphore.handle());
         semaphore.to_signalled()

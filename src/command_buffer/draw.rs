@@ -34,7 +34,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdSetViewport)]
     pub fn set_viewport(&mut self, viewport: &Viewport) {
         unsafe {
-            (self.device.fun.cmd_set_viewport)(
+            (self.device.fun().cmd_set_viewport)(
                 self.buffer.handle_mut(),
                 0,
                 1,
@@ -60,7 +60,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdSetScissor)]
     pub fn set_scissor(&mut self, scissor: &Rect2D) {
         unsafe {
-            (self.device.fun.cmd_set_scissor)(
+            (self.device.fun().cmd_set_scissor)(
                 self.buffer.handle_mut(),
                 0,
                 1,
@@ -73,8 +73,13 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
 impl<'rec> Bindings<'rec> {
     fn check(&self) -> Result<()> {
         if let Some(pipeline) = self.pipeline.as_ref() {
-            let layouts = &pipeline.layout().layouts();
-            if self.layout.get(0..layouts.len()) == Some(layouts)
+            // Is this not just checked by inited?
+            let layouts = pipeline.layout().layouts();
+            if self.layout.len() >= layouts.len()
+                && self.layout[0..layouts.len()]
+                    .iter()
+                    .copied()
+                    .eq(layouts.iter())
                 && self.inited.iter().take_while(|b| **b).count()
                     >= layouts.len()
             {
@@ -241,7 +246,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     ) -> Result<()> {
         self.graphics.check()?;
         unsafe {
-            (self.device.fun.cmd_draw)(
+            (self.device.fun().cmd_draw)(
                 self.buffer.handle_mut(),
                 vertex_count,
                 instance_count,
@@ -261,7 +266,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         bounds_check_n(draw_count, 16, stride, buffer, offset)?;
         self.graphics.check()?;
         unsafe {
-            (self.device.fun.cmd_draw_indirect)(
+            (self.device.fun().cmd_draw_indirect)(
                 self.buffer.handle_mut(),
                 buffer.handle(),
                 offset,
@@ -277,7 +282,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     ) -> Result<()> {
         self.graphics.check()?;
         unsafe {
-            (self.device.fun.cmd_draw_indexed)(
+            (self.device.fun().cmd_draw_indexed)(
                 self.buffer.handle_mut(),
                 index_count,
                 instance_count,
@@ -298,7 +303,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         }
         self.graphics.check()?;
         unsafe {
-            (self.device.fun.cmd_draw_indexed_indirect)(
+            (self.device.fun().cmd_draw_indexed_indirect)(
                 self.buffer.handle_mut(),
                 buffer.handle(),
                 offset,
@@ -317,7 +322,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     ) -> Result<()> {
         self.compute.check()?;
         unsafe {
-            (self.device.fun.cmd_dispatch)(
+            (self.device.fun().cmd_dispatch)(
                 self.buffer.handle_mut(),
                 group_count_x,
                 group_count_y,
@@ -332,7 +337,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     ) -> Result<()> {
         self.compute.check()?;
         unsafe {
-            (self.device.fun.cmd_dispatch_indirect)(
+            (self.device.fun().cmd_dispatch_indirect)(
                 self.buffer.handle_mut(),
                 buffer.handle(),
                 offset,
@@ -364,7 +369,7 @@ impl<'rec, 'pool> ExternalRenderPassRecording<'rec, 'pool> {
         }
 
         unsafe {
-            (self.rec.device.fun.cmd_execute_commands)(
+            (self.rec.device.fun().cmd_execute_commands)(
                 self.rec.buffer.handle_mut(),
                 handles.len() as u32,
                 Array::from_slice(&handles).ok_or(Error::InvalidArgument)?,

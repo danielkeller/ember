@@ -19,24 +19,28 @@ use crate::ffi::*;
 use crate::render_pass::RenderPass;
 use crate::types::*;
 
+// Maybe there's a better way to manage these layout things.
+
 /// A
 #[doc = crate::spec_link!("pipeline layout", "14", "descriptorsets-pipelinelayout")]
 #[derive(Debug)]
-pub struct PipelineLayout<'a> {
+pub struct PipelineLayout {
     handle: Handle<VkPipelineLayout>,
-    set_layouts: Vec<&'a DescriptorSetLayout<'a>>,
+    // TODO: Use something like RenderPassCompat instead.
+    set_layouts: Vec<DescriptorSetLayout>,
     push_constant_ranges: Vec<PushConstantRange>,
+    // Wait, why did we need this again?
     push_constant_voids: Vec<Range<u32>>,
-    device: &'a Device<'a>,
+    device: Device,
 }
 
-impl<'a> PipelineLayout<'a> {
+impl PipelineLayout {
     #[doc = crate::man_link!(vkCreatePipelineLayout)]
     pub fn new(
-        device: &'a Device, flags: PipelineLayoutCreateFlags,
-        set_layouts: Vec<&'a DescriptorSetLayout>,
+        device: &Device, flags: PipelineLayoutCreateFlags,
+        set_layouts: &[DescriptorSetLayout],
         push_constant_ranges: Vec<PushConstantRange>,
-    ) -> Result<Arc<PipelineLayout<'a>>> {
+    ) -> Result<PipelineLayout> {
         let lim = &device.limits();
         if set_layouts.len() > lim.max_bound_descriptor_sets as usize {
             return Err(Error::LimitExceeded);
@@ -46,7 +50,7 @@ impl<'a> PipelineLayout<'a> {
             ShaderStageFlags::VERTEX,
             ShaderStageFlags::FRAGMENT,
         ] {
-            let of = |ty| matching_resources(&set_layouts, ty, stage);
+            let of = |ty| matching_resources(set_layouts, ty, stage);
             let sampler = of(DescriptorType::SAMPLER);
             let image = of(DescriptorType::SAMPLED_IMAGE);
             let image_sampler = of(DescriptorType::COMBINED_IMAGE_SAMPLER);
@@ -117,7 +121,7 @@ impl<'a> PipelineLayout<'a> {
         unsafe {
             let set_layouts =
                 &set_layouts.iter().map(|l| l.borrow()).collect::<Vec<_>>();
-            (device.fun.create_pipeline_layout)(
+            (device.fun().create_pipeline_layout)(
                 device.handle(),
                 &PipelineLayoutCreateInfo {
                     flags,
@@ -129,14 +133,15 @@ impl<'a> PipelineLayout<'a> {
                 &mut handle,
             )?;
         }
+        let set_layouts = set_layouts.iter().map(|s| s.clone()).collect();
         let push_constant_voids = find_voids(&push_constant_ranges)?;
-        Ok(Arc::new(PipelineLayout {
+        Ok(PipelineLayout {
             handle: handle.unwrap(),
             set_layouts,
             push_constant_ranges,
             push_constant_voids,
-            device,
-        }))
+            device: device.clone(),
+        })
     }
 }
 
@@ -162,16 +167,16 @@ fn find_voids(ranges: &[PushConstantRange]) -> Result<Vec<Range<u32>>> {
 }
 
 fn matching_resources(
-    sets: &[&DescriptorSetLayout], descriptor_type: DescriptorType,
+    sets: &[DescriptorSetLayout], descriptor_type: DescriptorType,
     stage_flags: ShaderStageFlags,
 ) -> u32 {
     sets.iter().map(|s| s.num_bindings(descriptor_type, stage_flags)).sum()
 }
 
-impl Drop for PipelineLayout<'_> {
+impl Drop for PipelineLayout {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_pipeline_layout)(
+            (self.device.fun().destroy_pipeline_layout)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -180,13 +185,13 @@ impl Drop for PipelineLayout<'_> {
     }
 }
 
-impl PipelineLayout<'_> {
+impl PipelineLayout {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkPipelineLayout> {
         self.handle.borrow()
     }
     /// Returns the list of descriptor set layouts.
-    pub fn layouts(&self) -> &[&DescriptorSetLayout] {
+    pub(crate) fn layouts(&self) -> &[DescriptorSetLayout] {
         &self.set_layouts
     }
     /// Checks that the push constants are in bounds and `stage_flags` are
@@ -218,15 +223,15 @@ impl PipelineLayout<'_> {
 /// A
 #[doc = crate::spec_link!("pipeline", "10", "pipelines")]
 #[derive(Debug)]
-pub struct Pipeline<'d> {
+pub struct Pipeline {
     handle: Handle<VkPipeline>,
-    layout: Arc<PipelineLayout<'d>>,
-    render_pass: Option<Arc<RenderPass<'d>>>,
+    layout: Arc<PipelineLayout>,
+    render_pass: Option<Arc<RenderPass>>,
     subpass: u32,
 }
 
 #[doc = crate::man_link!(VkGraphicsPipelineCreateInfo)]
-pub struct GraphicsPipelineCreateInfo<'d, 'a> {
+pub struct GraphicsPipelineCreateInfo<'a> {
     pub stages: &'a [PipelineShaderStageCreateInfo<'a>],
     pub vertex_input_state: &'a PipelineVertexInputStateCreateInfo<'a>,
     pub input_assembly_state: &'a PipelineInputAssemblyStateCreateInfo,
@@ -237,13 +242,12 @@ pub struct GraphicsPipelineCreateInfo<'d, 'a> {
     pub depth_stencil_state: Option<&'a PipelineDepthStencilStateCreateInfo>,
     pub color_blend_state: &'a PipelineColorBlendStateCreateInfo<'a>,
     pub dynamic_state: Option<&'a PipelineDynamicStateCreateInfo<'a>>,
-    pub layout: &'a Arc<PipelineLayout<'d>>,
-    pub render_pass: &'a Arc<RenderPass<'d>>,
+    pub layout: &'a Arc<PipelineLayout>,
+    pub render_pass: &'a Arc<RenderPass>,
     pub subpass: u32,
-    pub cache: Option<&'a PipelineCache<'d>>,
 }
 
-impl<'d> Pipeline<'d> {
+impl Pipeline {
     // TODO: Bulk create
     /// Returns [`Error::OutOfBounds`] if `info.subpass` is out of bounds of
     /// `info.render_pass`, or the specialization constants are out of bounds.
@@ -252,7 +256,7 @@ impl<'d> Pipeline<'d> {
     /// attributes refer to a nonexistent binding.
     #[doc = crate::man_link!(vkCreateGraphicsPipeline)]
     pub fn new_graphics(
-        info: &GraphicsPipelineCreateInfo<'d, '_>,
+        info: &GraphicsPipelineCreateInfo<'_>,
     ) -> Result<Arc<Self>> {
         let lim = info.render_pass.device.limits();
         if info.subpass >= info.render_pass.num_subpasses() {
@@ -321,9 +325,9 @@ impl<'d> Pipeline<'d> {
         };
         let mut handle = MaybeUninit::uninit();
         unsafe {
-            (info.layout.device.fun.create_graphics_pipelines)(
+            (info.layout.device.fun().create_graphics_pipelines)(
                 info.layout.device.handle(),
-                info.cache.map(|c| c.handle.borrow()),
+                None,
                 1,
                 std::array::from_ref(&vk_info).into(),
                 None,
@@ -341,9 +345,8 @@ impl<'d> Pipeline<'d> {
     /// bounds.
     #[doc = crate::man_link!(vkCreateComputePipeline)]
     pub fn new_compute(
-        stage: PipelineShaderStageCreateInfo, layout: &Arc<PipelineLayout<'d>>,
-        cache: Option<&PipelineCache>,
-    ) -> Result<Arc<Pipeline<'d>>> {
+        stage: PipelineShaderStageCreateInfo, layout: &Arc<PipelineLayout>,
+    ) -> Result<Arc<Pipeline>> {
         check_specialization_constants(&stage)?;
         let info = ComputePipelineCreateInfo {
             stype: Default::default(),
@@ -356,9 +359,9 @@ impl<'d> Pipeline<'d> {
         };
         let mut handle = MaybeUninit::uninit();
         unsafe {
-            (layout.device.fun.create_compute_pipelines)(
+            (layout.device.fun().create_compute_pipelines)(
                 layout.device.handle(),
-                cache.map(|c| c.handle.borrow()),
+                None,
                 1,
                 std::array::from_ref(&info).into(),
                 None,
@@ -374,13 +377,13 @@ impl<'d> Pipeline<'d> {
     }
 }
 
-impl Pipeline<'_> {
+impl Pipeline {
     /// Borrows the inner Vulkan handle.
     pub fn borrow(&self) -> Ref<VkPipeline> {
         self.handle.borrow()
     }
     /// Returns the pipeline layout.
-    pub fn layout(&self) -> &PipelineLayout {
+    pub(crate) fn layout(&self) -> &PipelineLayout {
         &*self.layout
     }
     /// Returns the render pass the pipeline was created with, if it is a
@@ -396,10 +399,10 @@ impl Pipeline<'_> {
     }
 }
 
-impl Drop for Pipeline<'_> {
+impl Drop for Pipeline {
     fn drop(&mut self) {
         unsafe {
-            (self.layout.device.fun.destroy_pipeline)(
+            (self.layout.device.fun().destroy_pipeline)(
                 self.layout.device.handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -423,13 +426,16 @@ fn check_specialization_constants<T>(
     Ok(())
 }
 
+#[cfg(pipeline_cache)]
+
 /// A
 #[doc = crate::spec_link!("pipeline cache", "10", "pipelines-cache")]
 pub struct PipelineCache<'d> {
     handle: Handle<VkPipelineCache>,
-    device: &'d Device<'d>,
+    device: &'d Device,
 }
 
+#[cfg(pipeline_cache)]
 impl<'d> PipelineCache<'d> {
     /// Safety: `data` must either be empty or have been retuned from a previous
     /// call to [`PipelineCache::data`]. Hilariously, this function is
@@ -446,7 +452,7 @@ impl<'d> PipelineCache<'d> {
             flags: Default::default(),
             initial_data: data.into(),
         };
-        (device.fun.create_pipeline_cache)(
+        (device.fun().create_pipeline_cache)(
             device.handle(),
             &info,
             None,
@@ -461,14 +467,14 @@ impl<'d> PipelineCache<'d> {
         let mut result = Vec::new();
         loop {
             unsafe {
-                (self.device.fun.get_pipeline_cache_data)(
+                (self.device.fun().get_pipeline_cache_data)(
                     self.device.handle(),
                     self.handle.borrow(),
                     &mut len,
                     None,
                 )?;
                 result.reserve(len);
-                let maybe_worked = (self.device.fun.get_pipeline_cache_data)(
+                let maybe_worked = (self.device.fun().get_pipeline_cache_data)(
                     self.device.handle(),
                     self.handle.borrow(),
                     &mut len,
@@ -488,10 +494,11 @@ impl<'d> PipelineCache<'d> {
     }
 }
 
+#[cfg(pipeline_cache)]
 impl Drop for PipelineCache<'_> {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_pipeline_cache)(
+            (self.device.fun().destroy_pipeline_cache)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,

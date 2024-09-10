@@ -30,7 +30,6 @@ mod exclusive;
 mod fence;
 mod semaphore;
 mod ffi;
-mod framebuffer;
 mod load;
 mod shader;
 mod pipeline;
@@ -114,7 +113,7 @@ impl PoolSet {
     fn reset(&mut self) {}
 }
 
-fn device<'a>() -> &'a vk::Device<'a> {
+fn device<'a>() -> &'a vk::Device {
     todo!()
 }
 
@@ -254,18 +253,15 @@ pub mod vk {
     pub use crate::ext::khr_swapchain::SwapchainCreateInfoKHR;
     pub use crate::fence::{Fence, PendingFence};
     pub use crate::ffi::*;
-    pub use crate::framebuffer::Framebuffer;
     pub use crate::image::{
-        Image, ImageView, ImageViewCreateInfo, ImageWithoutMemory,
+        Framebuffer, Image, ImageView, ImageViewCreateInfo, ImageWithoutMemory,
     };
     pub use crate::instance::Instance;
     pub use crate::instance_extension_properties;
-    pub use crate::memory::{
-        DeviceMemory, MappedMemory, MemoryRead, MemoryWrite,
-    };
+    pub use crate::memory::{DeviceMemory, MappedMemory};
     pub use crate::physical_device::PhysicalDevice;
     pub use crate::pipeline::{
-        GraphicsPipelineCreateInfo, Pipeline, PipelineCache, PipelineLayout,
+        GraphicsPipelineCreateInfo, Pipeline, PipelineLayout,
     };
     pub use crate::queue::Queue;
     pub use crate::queue::SubmitScope;

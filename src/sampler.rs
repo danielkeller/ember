@@ -10,21 +10,26 @@ use crate::device::Device;
 use crate::error::Result;
 use crate::types::*;
 
-/// A
-#[doc = crate::spec_link!("sampler", "13", "samplers")]
 #[derive(Debug, Eq)]
-pub struct Sampler<'d> {
+struct SamplerInner {
     handle: Handle<VkSampler>,
-    device: &'d Device<'d>,
+    device: Device,
 }
 
-impl<'d> Sampler<'d> {
+/// A
+#[doc = crate::spec_link!("sampler", "13", "samplers")]
+#[derive(Debug, PartialEq, Eq)]
+pub struct Sampler {
+    inner: Arc<SamplerInner>,
+}
+
+impl Sampler {
     #[doc = crate::man_link!(vkCreateSampler)]
-    pub fn new(device: &'d Device, info: &SamplerCreateInfo) -> Result<Self> {
+    pub fn new(device: &Device, info: &SamplerCreateInfo) -> Result<Self> {
         device.increment_sampler_alloc_count()?;
         let mut handle = None;
         let result = unsafe {
-            (device.fun.create_sampler)(
+            (device.fun().create_sampler)(
                 device.handle(),
                 info,
                 None,
@@ -35,14 +40,18 @@ impl<'d> Sampler<'d> {
             device.decrement_sampler_alloc_count();
             result?
         }
-        Ok(Self { handle: handle.unwrap(), device })
+        let inner = Arc::new(SamplerInner {
+            handle: handle.unwrap(),
+            device: device.clone(),
+        });
+        Ok(Self { inner })
     }
 }
 
-impl Drop for Sampler<'_> {
+impl Drop for SamplerInner {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_sampler)(
+            (self.device.fun().destroy_sampler)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -52,19 +61,23 @@ impl Drop for Sampler<'_> {
     }
 }
 
-impl PartialEq for Sampler<'_> {
+impl PartialEq for SamplerInner {
     fn eq(&self, other: &Self) -> bool {
         self.handle == other.handle
     }
 }
 
-impl Sampler<'_> {
+impl Sampler {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkSampler> {
-        self.handle.borrow()
+        self.inner.handle.borrow()
     }
     /// Returns the associated device.
     pub fn device(&self) -> &Device {
-        self.device
+        &self.inner.device
+    }
+
+    pub(crate) fn clone(&self) -> Self {
+        Self { inner: self.inner.clone() }
     }
 }

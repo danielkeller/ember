@@ -16,9 +16,9 @@ use crate::types::*;
 /// A
 #[doc = crate::spec_link!("semaphore", "7", "synchronization-semaphores")]
 #[derive(Debug)]
-pub struct Semaphore<'d> {
+pub struct Semaphore {
     handle: Handle<VkSemaphore>,
-    device: &'d Device<'d>,
+    device: Device,
 }
 
 #[derive(Debug)]
@@ -26,19 +26,19 @@ pub struct SignalledSemaphore<'a> {
     handle: Ref<'a, VkSemaphore>,
 }
 
-impl<'d> Semaphore<'d> {
+impl Semaphore {
     #[doc = crate::man_link!(vkCreateSemaphore)]
-    pub fn new(device: &'d Device) -> Result<Self> {
+    pub fn new(device: &Device) -> Result<Self> {
         let mut handle = None;
         unsafe {
-            (device.fun.create_semaphore)(
+            (device.fun().create_semaphore)(
                 device.handle(),
                 &Default::default(),
                 None,
                 &mut handle,
             )?;
         }
-        Ok(Self { handle: handle.unwrap(), device })
+        Ok(Self { handle: handle.unwrap(), device: device.clone() })
     }
 
     pub(crate) fn to_signalled(&self) -> SignalledSemaphore {
@@ -68,10 +68,10 @@ impl Drop for Semaphore<'_> {
     }
 }
 
-impl Drop for Semaphore<'_> {
+impl Drop for Semaphore {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_semaphore)(
+            (self.device.fun().destroy_semaphore)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -80,7 +80,7 @@ impl Drop for Semaphore<'_> {
     }
 }
 
-impl Semaphore<'_> {
+impl Semaphore {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkSemaphore> {
         self.handle.borrow()

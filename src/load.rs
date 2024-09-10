@@ -40,6 +40,7 @@ pub unsafe fn vk_enumerate_instance_extension_properties(
     transmute(load(None, "vkEnumerateInstanceExtensionProperties\0"))
 }
 
+#[non_exhaustive]
 pub struct InstanceFn {
     pub destroy_instance: unsafe extern "system" fn(
         Mut<VkInstance>,
@@ -131,6 +132,7 @@ fn load(instance: Option<Ref<VkInstance>>, name: &str) -> NonNull<c_void> {
 }
 
 #[allow(clippy::type_complexity)]
+#[non_exhaustive]
 pub struct DeviceFn {
     pub destroy_device: unsafe extern "system" fn(
         Mut<VkDevice>,
@@ -681,7 +683,7 @@ impl Instance {
     /// function was not found.
     fn load(&self, device: Ref<VkDevice>, name: &str) -> NonNull<c_void> {
         let ptr = unsafe {
-            (self.fun.get_device_proc_addr)(device, name.try_into().unwrap())
+            (self.fun().get_device_proc_addr)(device, name.try_into().unwrap())
         };
         ptr.unwrap_or_else(|| {
             panic!("Could not load {:?}", &name[0..name.len() - 1])
@@ -696,7 +698,7 @@ impl Instance {
     }
 }
 
-impl Device<'_> {
+impl Device {
     /// Loads device function. Panics if the string is not null-terminated or the
     /// function was not found.
     #[doc = crate::man_link!(vkGetDeviceProcAddr)]

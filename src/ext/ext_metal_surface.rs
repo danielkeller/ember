@@ -33,7 +33,7 @@ impl<'i> EXTMetalSurface<'i> {
     #[doc = crate::man_link!(vkCreateMetalSurfaceEXT)]
     pub unsafe fn create_metal_surface_ext(
         &self, info: &MetalSurfaceCreateInfoEXT,
-    ) -> Result<SurfaceKHR<'i>> {
+    ) -> Result<SurfaceKHR> {
         let mut handle = None;
         (self.fun.create_metal_surface_ext)(
             self.instance.handle(),
@@ -45,6 +45,7 @@ impl<'i> EXTMetalSurface<'i> {
     }
 }
 
+#[non_exhaustive]
 pub struct MetalSurfaceFn {
     pub create_metal_surface_ext: unsafe extern "system" fn(
         Ref<VkInstance>,

@@ -105,7 +105,7 @@ pub fn presentation_support(
 pub fn create_surface<'i>(
     instance: &'i Instance, display: &impl HasDisplayHandle,
     window: &impl HasWindowHandle,
-) -> Result<SurfaceKHR<'i>> {
+) -> Result<SurfaceKHR> {
     match (
         display.display_handle().unwrap().as_raw(),
         window.window_handle().unwrap().as_raw(),

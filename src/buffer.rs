@@ -8,43 +8,44 @@
 
 use crate::enums::*;
 use crate::error::{Error, Result};
-use crate::memory::DeviceMemory;
+use crate::memory::{DeviceMemory, MemoryInner};
 use crate::types::*;
 use crate::vk::Device;
 
 /// A buffer with no memory. Call [`Buffer::new`] to bind memory and create a
 /// [`Buffer`].
 #[derive(Debug)]
-pub struct BufferWithoutMemory<'d> {
+pub struct BufferWithoutMemory {
     handle: Handle<VkBuffer>,
     len: u64,
     usage: BufferUsageFlags,
-    device: &'d Device<'d>,
+    device: Device,
 }
 
 /// A
 #[doc = crate::spec_link!("buffer", "12", "resources-buffers")]
 /// with memory attached to it.
 #[derive(Debug)]
-pub struct Buffer<'a>(BufferWithoutMemory<'a>);
+pub struct Buffer {
+    inner: BufferWithoutMemory,
+    memory: Arc<MemoryInner>,
+}
 
-impl<'a> std::ops::Deref for Buffer<'a> {
-    type Target = BufferWithoutMemory<'a>;
+impl std::ops::Deref for Buffer {
+    type Target = BufferWithoutMemory;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.inner
     }
 }
 
 #[allow(clippy::len_without_is_empty)]
-impl<'d> BufferWithoutMemory<'d> {
+impl BufferWithoutMemory {
     #[doc = crate::man_link!(vkCreateBuffer)]
-    pub fn new(
-        device: &'d Device, info: &BufferCreateInfo<'_>,
-    ) -> Result<Self> {
+    pub fn new(device: &Device, info: &BufferCreateInfo<'_>) -> Result<Self> {
         let mut handle = None;
         unsafe {
-            (device.fun.create_buffer)(
+            (device.fun().create_buffer)(
                 device.handle(),
                 info,
                 None,
@@ -55,7 +56,7 @@ impl<'d> BufferWithoutMemory<'d> {
             handle: handle.unwrap(),
             len: info.size,
             usage: info.usage,
-            device,
+            device: device.clone(),
         })
     }
 
@@ -69,7 +70,7 @@ impl<'d> BufferWithoutMemory<'d> {
     }
     /// Returns the associated device.
     pub fn device(&self) -> &Device {
-        self.device
+        &self.device
     }
     /// Returns the buffer length in bytes.
     pub fn len(&self) -> u64 {
@@ -94,7 +95,7 @@ impl<'d> BufferWithoutMemory<'d> {
     pub fn memory_requirements(&self) -> MemoryRequirements {
         let mut result = Default::default();
         unsafe {
-            (self.device.fun.get_buffer_memory_requirements)(
+            (self.device.fun().get_buffer_memory_requirements)(
                 self.device.handle(),
                 self.handle.borrow(),
                 &mut result,
@@ -111,10 +112,10 @@ impl<'d> BufferWithoutMemory<'d> {
     }
 }
 
-impl Drop for BufferWithoutMemory<'_> {
+impl Drop for BufferWithoutMemory {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_buffer)(
+            (self.device.fun().destroy_buffer)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -123,29 +124,28 @@ impl Drop for BufferWithoutMemory<'_> {
     }
 }
 
-impl<'a> Buffer<'a> {
+impl Buffer {
     // TODO: Bulk bind
     /// Note that it is an error to bind a storage, uniform, vertex, or index
     /// buffer to host-visible memory when robust buffer access is not enabled.
     #[doc = crate::man_link!(vkBindBufferMemory)]
     pub fn new(
-        mut buffer: BufferWithoutMemory<'a>, memory: &'a DeviceMemory<'a>,
-        offset: u64,
+        mut buffer: BufferWithoutMemory, memory: &DeviceMemory, offset: u64,
     ) -> Result<Self> {
-        assert_eq!(memory.device(), buffer.device);
+        assert_eq!(memory.device(), &buffer.device);
         if !memory.check(offset, buffer.memory_requirements()) {
             return Err(Error::InvalidArgument);
         }
 
         unsafe {
-            (memory.device().fun.bind_buffer_memory)(
+            (memory.device().fun().bind_buffer_memory)(
                 memory.device().handle(),
                 buffer.handle.borrow_mut(),
                 memory.handle(),
                 offset,
             )?;
         }
-        Ok(Buffer(buffer))
+        Ok(Buffer { inner: buffer, memory: memory.inner() })
     }
 }
 

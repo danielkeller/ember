@@ -47,7 +47,7 @@ impl<'i> KHRWaylandSurface<'i> {
     #[doc = crate::man_link!(vkCreateWaylandSurfaceKHR)]
     pub unsafe fn create_wayland_surface_ext(
         &self, info: &WaylandSurfaceCreateInfoKHR,
-    ) -> Result<SurfaceKHR<'i>> {
+    ) -> Result<SurfaceKHR> {
         let mut handle = None;
         (self.fun.create_wayland_surface_khr)(
             self.instance.handle(),
@@ -59,6 +59,7 @@ impl<'i> KHRWaylandSurface<'i> {
     }
 }
 
+#[non_exhaustive]
 pub struct WaylandSurfaceFn {
     pub get_physical_device_wayland_presentation_support_khr:
         unsafe extern "system" fn(

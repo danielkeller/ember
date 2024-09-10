@@ -15,9 +15,9 @@ use crate::types::*;
 #[doc = concat!(crate::spec_link!("fence", "7", "synchronization-fences"), ".")]
 /// When submitted to a [`Queue`](crate::vk::Queue), becomes a [`PendingFence`].
 #[derive(Debug)]
-pub struct Fence<'d> {
+pub struct Fence {
     handle: Option<Handle<VkFence>>,
-    device: &'d Device<'d>,
+    device: Device,
 }
 
 /// A
@@ -25,18 +25,18 @@ pub struct Fence<'d> {
 /// with a signal operation pending.
 #[derive(Debug)]
 #[must_use = "Dropping a pending fence leaks it."]
-pub struct PendingFence<'d> {
+pub struct PendingFence {
     handle: Handle<VkFence>,
-    device: &'d Device<'d>,
+    device: Device,
     resources: Cleanup,
 }
 
-impl<'d> Fence<'d> {
+impl Fence {
     #[doc = crate::man_link!(vkCreateFence)]
-    pub fn new(device: &'d Device) -> Result<Self> {
+    pub fn new(device: &Device) -> Result<Self> {
         let mut handle = None;
         unsafe {
-            (device.fun.create_fence)(
+            (device.fun().create_fence)(
                 device.handle(),
                 &Default::default(),
                 None,
@@ -47,11 +47,11 @@ impl<'d> Fence<'d> {
     }
 }
 
-impl Drop for Fence<'_> {
+impl Drop for Fence {
     fn drop(&mut self) {
         if let Some(handle) = &mut self.handle {
             unsafe {
-                (self.device.fun.destroy_fence)(
+                (self.device.fun().destroy_fence)(
                     self.device.handle(),
                     handle.borrow_mut(),
                     None,
@@ -61,23 +61,21 @@ impl Drop for Fence<'_> {
     }
 }
 
-impl<'d> Fence<'d> {
+impl Fence {
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkFence> {
         self.handle.as_mut().unwrap().borrow_mut()
     }
-    pub(crate) fn into_pending(
-        mut self, resources: Cleanup,
-    ) -> PendingFence<'d> {
-        PendingFence {
-            handle: self.handle.take().unwrap(),
-            device: self.device,
-            resources,
-        }
-    }
+    // pub(crate) fn into_pending(mut self, resources: Cleanup) -> PendingFence {
+    //     PendingFence {
+    //         handle: self.handle.take().unwrap(),
+    //         device: self.device,
+    //         resources,
+    //     }
+    // }
 }
 
-impl<'d> PendingFence<'d> {
+impl PendingFence {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkFence> {
         self.handle.borrow()
@@ -86,9 +84,9 @@ impl<'d> PendingFence<'d> {
     /// (including [`CommandPools`](crate::vk::CommandPool)) submitted to
     /// the queue, and resets the fence.
     #[doc = crate::man_link!(vkWaitForFences)]
-    pub fn wait(mut self) -> Result<Fence<'d>> {
+    pub fn wait(mut self) -> Result<Fence> {
         unsafe {
-            (self.device.fun.wait_for_fences)(
+            (self.device.fun().wait_for_fences)(
                 self.device.handle(),
                 1,
                 (&[self.handle.borrow()]).into(),
@@ -98,7 +96,7 @@ impl<'d> PendingFence<'d> {
         }
         self.resources.cleanup();
         unsafe {
-            (self.device.fun.reset_fences)(
+            (self.device.fun().reset_fences)(
                 self.device.handle(),
                 1,
                 // Safe because the the outer structure is owned here

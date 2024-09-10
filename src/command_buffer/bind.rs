@@ -49,7 +49,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
             bind_point = PipelineBindPoint::COMPUTE;
         }
         unsafe {
-            (self.device.fun.cmd_bind_pipeline)(
+            (self.device.fun().cmd_bind_pipeline)(
                 self.buffer.handle_mut(),
                 bind_point,
                 pipeline.borrow(),
@@ -117,7 +117,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         let vkbuffers = &buffers.map(|b| b.handle());
 
         unsafe {
-            (self.device.fun.cmd_bind_vertex_buffers)(
+            (self.device.fun().cmd_bind_vertex_buffers)(
                 self.buffer.handle_mut(),
                 first_binding,
                 N as u32,
@@ -138,7 +138,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
             return Err(Error::InvalidArgument);
         }
         unsafe {
-            (self.device.fun.cmd_bind_index_buffer)(
+            (self.device.fun().cmd_bind_index_buffer)(
                 self.buffer.handle_mut(),
                 buffer.handle(),
                 offset,
@@ -212,12 +212,12 @@ impl<'a> Bindings<'a> {
             .layout
             .iter()
             .zip(layouts.iter())
-            .position(|(a, b)| a != b)
+            .position(|(a, b)| *a != b)
             .unwrap_or_else(|| self.layout.len().min(layouts.len()));
         if i < end {
             // Some bindings were invalidated
             self.layout.clear();
-            self.layout.extend(layouts.iter().cloned());
+            self.layout.extend(layouts.iter());
             self.inited.resize(i, false);
             self.inited.resize(begin, false);
             self.inited.resize(end, true);
@@ -242,11 +242,11 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdBindDescriptorSets)]
     pub fn bind_descriptor_sets(
         &mut self, pipeline_bind_point: PipelineBindPoint,
-        layout: &'pool PipelineLayout<'pool>, first_set: u32,
+        layout: &'pool PipelineLayout, first_set: u32,
         sets: &[&'pool DescriptorSet], dynamic_offsets: &[u32],
     ) -> Result<()> {
         // Max binding is already checked by the layout
-        let layouts = layout.layouts().iter().copied();
+        let layouts = layout.layouts().iter();
         if sets
             .iter()
             .map(|s| s.layout())
@@ -277,7 +277,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         let sets =
             self.scratch.alloc_slice_fill_iter(sets.iter().map(|s| s.handle()));
         unsafe {
-            (self.device.fun.cmd_bind_descriptor_sets)(
+            (self.device.fun().cmd_bind_descriptor_sets)(
                 self.buffer.handle_mut(),
                 pipeline_bind_point,
                 layout.handle(),
@@ -334,7 +334,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
             return Err(Error::OutOfBounds);
         }
         unsafe {
-            (self.device.fun.cmd_push_constants)(
+            (self.device.fun().cmd_push_constants)(
                 self.buffer.handle_mut(),
                 layout.handle(),
                 stage_flags,

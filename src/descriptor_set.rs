@@ -6,24 +6,35 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::cell::Cell;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
 use crate::device::Device;
 use crate::enums::{DescriptorType, ShaderStageFlags};
 use crate::error::{Error, Result};
 use crate::ffi::Array;
+use crate::sampler::Sampler;
 use crate::types::*;
 
 pub mod update;
 
+// I guess that if the buffers and stuff stored their handle inline, you could
+// make a derive macro for DescriptorUpdateTemplate.
+
+#[derive(Debug, Eq)]
+struct DescriptorSetLayoutInner {
+    handle: Handle<VkDescriptorSetLayout>,
+    bindings: Vec<DescriptorSetLayoutBinding>,
+    device: Device,
+}
+
 /// A
 #[doc = crate::spec_link!("descriptor set layout", "14", "descriptorsets-setlayout")]
-#[derive(Debug, Eq)]
-pub struct DescriptorSetLayout<'a> {
-    handle: Handle<VkDescriptorSetLayout>,
-    bindings: Vec<DescriptorSetLayoutBinding<'a>>,
-    device: &'a Device<'a>,
+#[derive(Debug, PartialEq, Eq)]
+pub struct DescriptorSetLayout {
+    inner: Arc<DescriptorSetLayoutInner>,
 }
 
 /// Note that unlike in Vulkan, the binding number is implicitly the index of
@@ -36,19 +47,19 @@ pub struct DescriptorSetLayout<'a> {
 ///
 #[doc = crate::man_link!(VkDescriptorSetLayoutBinding)]
 #[derive(Debug, PartialEq, Eq, Default)]
-pub struct DescriptorSetLayoutBinding<'a> {
+pub struct DescriptorSetLayoutBinding {
     pub descriptor_type: DescriptorType,
     pub descriptor_count: u32,
     pub stage_flags: ShaderStageFlags,
-    pub immutable_samplers: Vec<Ref<'a, VkSampler>>,
+    pub immutable_samplers: Vec<Sampler>,
 }
 
-impl<'a> DescriptorSetLayout<'a> {
+impl DescriptorSetLayout {
     // TODO: vkGetDescriptorSetLayoutSupport
 
     #[doc = crate::man_link!(VkDescriptorSetLayout)]
     pub fn new(
-        device: &'a Device, bindings: Vec<DescriptorSetLayoutBinding<'a>>,
+        device: &Device, bindings: Vec<DescriptorSetLayoutBinding>,
     ) -> Result<Self> {
         for b in &bindings {
             if !b.immutable_samplers.is_empty()
@@ -63,20 +74,29 @@ impl<'a> DescriptorSetLayout<'a> {
             }
         }
 
-        let vk_bindings = bindings
-            .iter()
-            .enumerate()
-            .map(|(i, b)| VkDescriptorSetLayoutBinding {
+        let mut samplers = vec![];
+        for b in &bindings {
+            samplers.extend(b.immutable_samplers.iter().map(|s| s.handle()));
+        }
+
+        let mut s_i = 0;
+        let mut vk_bindings = vec![];
+        for (i, b) in bindings.iter().enumerate() {
+            let s_j = s_i + b.immutable_samplers.len();
+            let immutable_samplers = Array::from_slice(&samplers[s_i..s_j]);
+            s_i = s_j;
+
+            vk_bindings.push(VkDescriptorSetLayoutBinding {
                 binding: i as u32,
                 descriptor_type: b.descriptor_type,
                 descriptor_count: b.descriptor_count,
                 stage_flags: b.stage_flags,
-                immutable_samplers: Array::from_slice(&b.immutable_samplers),
-            })
-            .collect::<Vec<_>>();
+                immutable_samplers,
+            });
+        }
         let mut handle = None;
         unsafe {
-            (device.fun.create_descriptor_set_layout)(
+            (device.fun().create_descriptor_set_layout)(
                 device.handle(),
                 &VkDescriptorSetLayoutCreateInfo {
                     bindings: vk_bindings.as_slice().into(),
@@ -87,14 +107,19 @@ impl<'a> DescriptorSetLayout<'a> {
             )?;
         }
 
-        Ok(DescriptorSetLayout { handle: handle.unwrap(), bindings, device })
+        let inner = Arc::new(DescriptorSetLayoutInner {
+            handle: handle.unwrap(),
+            bindings,
+            device: device.clone(),
+        });
+        Ok(DescriptorSetLayout { inner })
     }
 }
 
-impl Drop for DescriptorSetLayout<'_> {
+impl Drop for DescriptorSetLayoutInner {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_descriptor_set_layout)(
+            (self.device.fun().destroy_descriptor_set_layout)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -103,22 +128,22 @@ impl Drop for DescriptorSetLayout<'_> {
     }
 }
 
-impl PartialEq for DescriptorSetLayout<'_> {
+impl PartialEq for DescriptorSetLayoutInner {
     /// Compatible descriptor sets layouts are equal
     fn eq(&self, other: &Self) -> bool {
         self.bindings == other.bindings && self.device == other.device
     }
 }
 
-impl DescriptorSetLayout<'_> {
+impl DescriptorSetLayout {
     /// Borrows the inner Vulkan handle.
     pub fn borrow(&self) -> Ref<VkDescriptorSetLayout> {
-        self.handle.borrow()
+        self.inner.handle.borrow()
     }
     /// Returns the number of dynamic offsets the descriptor set will require.
     pub(crate) fn num_dynamic_offsets(&self) -> u32 {
         let mut result = 0;
-        for b in &self.bindings {
+        for b in &self.inner.bindings {
             if b.descriptor_type == DescriptorType::UNIFORM_BUFFER_DYNAMIC
                 || b.descriptor_type == DescriptorType::STORAGE_BUFFER_DYNAMIC
             {
@@ -131,7 +156,8 @@ impl DescriptorSetLayout<'_> {
     pub(crate) fn num_bindings(
         &self, descriptor_type: DescriptorType, stage_flags: ShaderStageFlags,
     ) -> u32 {
-        self.bindings
+        self.inner
+            .bindings
             .iter()
             .filter(|b| {
                 b.descriptor_type == descriptor_type
@@ -139,24 +165,37 @@ impl DescriptorSetLayout<'_> {
             })
             .count() as u32
     }
+
+    pub(crate) fn clone(&self) -> Self {
+        Self { inner: self.inner.clone() }
+    }
+
+    pub(crate) fn device(&self) -> &Device {
+        &self.inner.device
+    }
+
+    pub(crate) fn bindings(&self) -> &[DescriptorSetLayoutBinding] {
+        &self.inner.bindings
+    }
 }
 
 /// A
 #[doc = crate::spec_link!("descriptor pool", "14", "descriptorsets-allocation")]
-pub struct DescriptorPool<'d> {
+pub struct DescriptorPool {
     handle: Handle<VkDescriptorPool>,
-    device: &'d Device<'d>,
+    device: Device,
     scratch: bumpalo::Bump,
+    non_sync_: PhantomData<Cell<()>>,
 }
 
-impl<'d> DescriptorPool<'d> {
+impl DescriptorPool {
     #[doc = crate::man_link!(vkCreateDescriptorPool)]
     pub fn new(
-        device: &'d Device, max_sets: u32, pool_sizes: &[DescriptorPoolSize],
+        device: &Device, max_sets: u32, pool_sizes: &[DescriptorPoolSize],
     ) -> Result<Self> {
         let mut handle = None;
         unsafe {
-            (device.fun.create_descriptor_pool)(
+            (device.fun().create_descriptor_pool)(
                 device.handle(),
                 &DescriptorPoolCreateInfo {
                     max_sets,
@@ -169,16 +208,17 @@ impl<'d> DescriptorPool<'d> {
         }
         Ok(DescriptorPool {
             handle: handle.unwrap(),
-            device,
+            device: device.clone(),
             scratch: bumpalo::Bump::new(),
+            non_sync_: PhantomData,
         })
     }
 }
 
-impl Drop for DescriptorPool<'_> {
+impl Drop for DescriptorPool {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_descriptor_pool)(
+            (self.device.fun().destroy_descriptor_pool)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -187,10 +227,10 @@ impl Drop for DescriptorPool<'_> {
     }
 }
 
-impl DescriptorPool<'_> {
+impl DescriptorPool {
     pub fn reset(&mut self) -> Result<()> {
         unsafe {
-            (self.device.fun.reset_descriptor_pool)(
+            (self.device.fun().reset_descriptor_pool)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 Default::default(),
@@ -221,19 +261,19 @@ impl DescriptorPool<'_> {
 #[derive(Debug)]
 pub struct DescriptorSet<'a> {
     handle: Handle<VkDescriptorSet>,
-    layout: &'a DescriptorSetLayout<'a>,
+    layout: &'a DescriptorSetLayout,
     inited: &'a mut [&'a mut [bool]],
 }
 
 impl<'a> DescriptorSet<'a> {
     #[doc = crate::man_link!(vkAllocateDescriptorSets)]
     pub fn new(
-        pool: &'a DescriptorPool<'a>, layout: &'a DescriptorSetLayout<'a>,
+        pool: &'a DescriptorPool, layout: &'a DescriptorSetLayout,
     ) -> Result<Self> {
-        assert_eq!(pool.device, layout.device);
+        assert_eq!(pool.device, layout.inner.device);
         let mut handle = MaybeUninit::uninit();
         let handle = unsafe {
-            (pool.device.fun.allocate_descriptor_sets)(
+            (pool.device.fun().allocate_descriptor_sets)(
                 pool.device.handle(),
                 &DescriptorSetAllocateInfo {
                     stype: Default::default(),
@@ -246,7 +286,7 @@ impl<'a> DescriptorSet<'a> {
             handle.assume_init()
         };
         let inited = pool.scratch.alloc_slice_fill_iter(
-            layout.bindings.iter().map(|b| {
+            layout.inner.bindings.iter().map(|b| {
                 pool.scratch
                     .alloc_slice_fill_default(b.descriptor_count as usize)
             }),

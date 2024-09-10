@@ -101,17 +101,17 @@ use bumpalo::collections::Vec as BumpVec;
 ///     .end();
 /// # Ok::<_, vk::Error>(())
 /// ```
-pub struct DescriptorSetUpdateBuilder<'d> {
-    pub(crate) device: &'d Device<'d>,
+pub struct DescriptorSetUpdateBuilder {
+    pub(crate) device: Device,
     pub(crate) scratch: Exclusive<bumpalo::Bump>,
 }
 
-impl<'d> DescriptorSetUpdateBuilder<'d> {
+impl DescriptorSetUpdateBuilder {
     /// Create an object that builds calls to vkUpdateDescriptorSets.
-    pub fn new(device: &'d Device) -> Self {
+    pub fn new(device: &Device) -> Self {
         DescriptorSetUpdateBuilder {
             scratch: Exclusive::new(bumpalo::Bump::new()),
-            device,
+            device: device.clone(),
         }
     }
 }
@@ -126,7 +126,7 @@ struct Resource {
 /// A builder for a call to vkUpdateDescriptorSets.
 #[must_use = "This object does nothing until end() is called."]
 pub struct DescriptorSetUpdates<'u, 's> {
-    device: &'u Device<'u>,
+    device: &'u Device, // I guess &?
     bump: &'u bumpalo::Bump,
     writes: BumpVec<'u, VkWriteDescriptorSet<'u>>,
     copies: BumpVec<'u, VkCopyDescriptorSet<'u>>,
@@ -134,7 +134,7 @@ pub struct DescriptorSetUpdates<'u, 's> {
     resources: BumpVec<'u, Resource>,
 }
 
-impl<'d> DescriptorSetUpdateBuilder<'d> {
+impl DescriptorSetUpdateBuilder {
     /// Begin creating a call to vkUpdateDescriptorSets. Since these calls are
     /// expensive, try to combine them as much as possible.
     pub fn begin<'u, 's>(&'u mut self) -> DescriptorSetUpdates<'u, 's> {
@@ -162,7 +162,7 @@ impl<'u, 's> DescriptorSetUpdates<'u, 's> {
     pub fn dst_set(
         self, set: &'u mut DescriptorSet<'s>,
     ) -> DescriptorSetUpdate<'s, 'u> {
-        assert_eq!(&*set.layout.device, self.device);
+        assert_eq!(&*set.layout.device(), self.device);
         DescriptorSetUpdate { updates: self, set }
     }
     pub(crate) fn end(mut self) {
@@ -170,7 +170,7 @@ impl<'u, 's> DescriptorSetUpdates<'u, 's> {
             self.dst_sets[res.set].inited[res.binding][res.element] = true;
         }
         unsafe {
-            (self.device.fun.update_descriptor_sets)(
+            (self.device.fun().update_descriptor_sets)(
                 self.device.handle(),
                 self.writes.len() as u32,
                 Array::from_slice(&self.writes),
@@ -183,7 +183,7 @@ impl<'u, 's> DescriptorSetUpdates<'u, 's> {
 
 #[doc = crate::man_link!(VkDescriptorBufferInfo)]
 pub struct DescriptorBufferInfo<'a> {
-    pub buffer: &'a Buffer<'a>,
+    pub buffer: &'a Buffer,
     pub offset: u64,
     pub range: Option<u64>,
 }
@@ -235,7 +235,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
         descriptor_type: DescriptorType,
     ) -> Result<Self> {
         let iter = BindingIter::new(
-            &self.set.layout.bindings,
+            self.set.layout.bindings(),
             dst_binding as usize,
             dst_array_element,
             descriptor_type,
@@ -349,14 +349,16 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
         samplers: &[&'s Sampler],
     ) -> Result<Self> {
         let iter = BindingIter::new(
-            &self.set.layout.bindings,
+            self.set.layout.bindings(),
             dst_binding as usize,
             dst_array_element,
             DescriptorType::SAMPLER,
         );
         for (&s, be) in samplers.iter().zip(iter) {
             let (binding, element) = be?;
-            if !self.set.layout.bindings[binding].immutable_samplers.is_empty()
+            if !self.set.layout.bindings()[binding]
+                .immutable_samplers
+                .is_empty()
             {
                 return Err(Error::InvalidArgument);
             }
@@ -392,18 +394,18 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
 
     pub(crate) fn images_impl(
         mut self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'s ImageView<'s>, ImageLayout)],
+        images: &[(&'s ImageView, ImageLayout)],
         descriptor_type: DescriptorType,
     ) -> Result<Self> {
         let iter = BindingIter::new(
-            &self.set.layout.bindings,
+            &self.set.layout.bindings(),
             dst_binding as usize,
             dst_array_element,
             descriptor_type,
         );
         for (&(i, _), be) in images.iter().zip(iter) {
             let (binding, element) = be?;
-            if !descriptor_type.supports_image_usage(i.image().usage()) {
+            if !descriptor_type.supports_image_usage(i.usage()) {
                 return Err(Error::InvalidArgument);
             }
             assert_eq!(i.device(), self.updates.device);
@@ -439,7 +441,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     #[doc = image_checks!()]
     pub fn sampled_images(
         self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'s ImageView<'s>, ImageLayout)],
+        images: &[(&'s ImageView, ImageLayout)],
     ) -> Result<Self> {
         self.images_impl(
             dst_binding,
@@ -452,7 +454,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     #[doc = image_checks!()]
     pub fn storage_images(
         self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'s ImageView<'s>, ImageLayout)],
+        images: &[(&'s ImageView, ImageLayout)],
     ) -> Result<Self> {
         self.images_impl(
             dst_binding,
@@ -465,7 +467,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     #[doc = image_checks!()]
     pub fn input_attachments(
         self, dst_binding: u32, dst_array_element: u32,
-        images: &[(&'s ImageView<'s>, ImageLayout)],
+        images: &[(&'s ImageView, ImageLayout)],
     ) -> Result<Self> {
         self.images_impl(
             dst_binding,
@@ -482,7 +484,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
         images: &[(&'s ImageView, ImageLayout)],
     ) -> Result<Self> {
         let iter = BindingIter::new(
-            &self.set.layout.bindings,
+            self.set.layout.bindings(),
             dst_binding as usize,
             dst_array_element,
             DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -523,7 +525,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
 /// Gets the binding and element number for a series of consecutive bindings,
 /// doing bounds and type checking on each.
 struct BindingIter<'a> {
-    bindings: &'a [DescriptorSetLayoutBinding<'a>],
+    bindings: &'a [DescriptorSetLayoutBinding],
     binding: usize,
     element: u32,
     descriptor_type: DescriptorType,

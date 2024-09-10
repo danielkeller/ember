@@ -48,7 +48,7 @@ impl<'i> KHRXlibSurface<'i> {
     #[doc = crate::man_link!(vkCreateXlibSurfaceKHR)]
     pub unsafe fn create_xlib_surface_ext(
         &self, info: &XlibSurfaceCreateInfoKHR,
-    ) -> Result<SurfaceKHR<'i>> {
+    ) -> Result<SurfaceKHR> {
         let mut handle = None;
         (self.fun.create_xlib_surface_khr)(
             self.instance.handle(),
@@ -60,6 +60,7 @@ impl<'i> KHRXlibSurface<'i> {
     }
 }
 
+#[non_exhaustive]
 pub struct XlibSurfaceFn {
     pub get_physical_device_xlib_presentation_support_khr:
         unsafe extern "system" fn(

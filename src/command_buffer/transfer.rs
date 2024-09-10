@@ -40,7 +40,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
             }
         };
         unsafe {
-            (self.device.fun.cmd_fill_buffer)(
+            (self.device.fun().cmd_fill_buffer)(
                 self.buffer.handle_mut(),
                 dst.handle(),
                 offset,
@@ -66,7 +66,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
             }
         }
         unsafe {
-            (self.device.fun.cmd_copy_buffer)(
+            (self.device.fun().cmd_copy_buffer)(
                 self.buffer.handle_mut(),
                 src.handle(),
                 dst.handle(),
@@ -103,7 +103,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
             }
         }
         unsafe {
-            (self.device.fun.cmd_copy_buffer_to_image)(
+            (self.device.fun().cmd_copy_buffer_to_image)(
                 self.buffer.handle_mut(),
                 src.handle(),
                 dst.handle(),
@@ -148,7 +148,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
             }
         }
         unsafe {
-            (self.device.fun.cmd_blit_image)(
+            (self.device.fun().cmd_blit_image)(
                 self.buffer.handle_mut(),
                 src.handle(),
                 src_layout,
@@ -171,7 +171,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     ) -> Result<()> {
         let array = Array::from_slice(ranges).ok_or(Error::InvalidArgument)?;
         unsafe {
-            (self.device.fun.cmd_clear_color_image)(
+            (self.device.fun().cmd_clear_color_image)(
                 self.buffer.handle_mut(),
                 image.handle(),
                 layout,

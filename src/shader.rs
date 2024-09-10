@@ -13,20 +13,20 @@ use crate::types::*;
 
 /// A
 #[doc = crate::spec_link!("shader module", "9", "shaders")]
-pub struct ShaderModule<'d> {
+pub struct ShaderModule {
     handle: Handle<VkShaderModule>,
-    device: &'d Device<'d>,
+    device: Device,
 }
 
-impl<'d> ShaderModule<'d> {
+impl ShaderModule {
     #[doc = crate::man_link!(vkCreateShaderModule)]
-    pub fn new(device: &'d Device, code: &[u32]) -> Result<Self> {
+    pub fn new(device: Device, code: &[u32]) -> Result<Self> {
         if code.is_empty() {
             return Err(Error::InvalidArgument);
         }
         let mut handle = None;
         unsafe {
-            (device.fun.create_shader_module)(
+            (device.fun().create_shader_module)(
                 device.handle(),
                 &VkShaderModuleCreateInfo {
                     stype: Default::default(),
@@ -43,10 +43,10 @@ impl<'d> ShaderModule<'d> {
     }
 }
 
-impl Drop for ShaderModule<'_> {
+impl Drop for ShaderModule {
     fn drop(&mut self) {
         unsafe {
-            (self.device.fun.destroy_shader_module)(
+            (self.device.fun().destroy_shader_module)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 None,
@@ -55,7 +55,7 @@ impl Drop for ShaderModule<'_> {
     }
 }
 
-impl ShaderModule<'_> {
+impl ShaderModule {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkShaderModule> {
         self.handle.borrow()

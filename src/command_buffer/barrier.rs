@@ -128,7 +128,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         image_memory_barriers: &[ImageMemoryBarrier<'pool>],
     ) {
         unsafe {
-            (self.device.fun.cmd_pipeline_barrier)(
+            (self.device.fun().cmd_pipeline_barrier)(
                 self.buffer.handle_mut(),
                 src_stage_mask,
                 dst_stage_mask,
@@ -151,7 +151,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         dst_access_mask: AccessFlags,
     ) {
         unsafe {
-            (self.device.fun.cmd_pipeline_barrier)(
+            (self.device.fun().cmd_pipeline_barrier)(
                 self.buffer.handle_mut(),
                 src_stage_mask,
                 dst_stage_mask,
@@ -191,7 +191,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 image: image.handle(),
                 subresource_range: Default::default(),
             };
-            (self.device.fun.cmd_pipeline_barrier)(
+            (self.device.fun().cmd_pipeline_barrier)(
                 self.buffer.handle_mut(),
                 src_stage_mask,
                 dst_stage_mask,
