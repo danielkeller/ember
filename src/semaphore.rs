@@ -13,17 +13,17 @@ use crate::types::*;
 // Preventing double-signals requires knowing when things will run, so we don't
 // try to.
 
+// ... You only want to use a semaphore within a submit scope, since outside of it,
+// if you wait for the fence then submit you get a stronger ordering.
+// ... Unless you're using it in looped mode, where you might want to wait for
+// stuff from the last frame.
+
 /// A
 #[doc = crate::spec_link!("semaphore", "7", "synchronization-semaphores")]
 #[derive(Debug)]
 pub struct Semaphore {
     handle: Handle<VkSemaphore>,
     device: Device,
-}
-
-#[derive(Debug)]
-pub struct SignalledSemaphore<'a> {
-    handle: Ref<'a, VkSemaphore>,
 }
 
 impl Semaphore {
@@ -39,10 +39,6 @@ impl Semaphore {
             )?;
         }
         Ok(Self { handle: handle.unwrap(), device: device.clone() })
-    }
-
-    pub(crate) fn to_signalled(&self) -> SignalledSemaphore {
-        SignalledSemaphore { handle: self.handle() }
     }
 }
 
@@ -88,11 +84,5 @@ impl Semaphore {
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkSemaphore> {
         self.handle.borrow_mut()
-    }
-}
-
-impl<'a> SignalledSemaphore<'a> {
-    pub fn into_handle(self) -> Ref<'a, VkSemaphore> {
-        self.handle
     }
 }

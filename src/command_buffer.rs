@@ -163,7 +163,7 @@ impl CommandPool {
         inner.free_buffers.extend(old_len..new_len);
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.inner.borrow().buffers.len()
     }
 

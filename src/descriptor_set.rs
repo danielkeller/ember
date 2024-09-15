@@ -128,6 +128,7 @@ impl Drop for DescriptorSetLayoutInner {
     }
 }
 
+// TODO: maybe just compare the pointers.
 impl PartialEq for DescriptorSetLayoutInner {
     /// Compatible descriptor sets layouts are equal
     fn eq(&self, other: &Self) -> bool {
@@ -264,6 +265,7 @@ pub struct DescriptorSet<'a> {
     handle: Handle<VkDescriptorSet>,
     layout: &'a DescriptorSetLayout,
     inited: &'a mut [&'a mut [bool]],
+    //resources: &'a mut [Option<Arc<dyn Send + Sync + Debug>>>],
 }
 
 impl<'a> DescriptorSet<'a> {

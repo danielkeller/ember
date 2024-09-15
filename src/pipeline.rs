@@ -26,7 +26,6 @@ use crate::types::*;
 #[derive(Debug)]
 pub struct PipelineLayout {
     handle: Handle<VkPipelineLayout>,
-    // TODO: Use something like RenderPassCompat instead.
     set_layouts: Vec<DescriptorSetLayout>,
     push_constant_ranges: Vec<PushConstantRange>,
     // Wait, why did we need this again?
@@ -38,7 +37,7 @@ impl PipelineLayout {
     #[doc = crate::man_link!(vkCreatePipelineLayout)]
     pub fn new(
         device: &Device, flags: PipelineLayoutCreateFlags,
-        set_layouts: &[DescriptorSetLayout],
+        set_layouts: &[&DescriptorSetLayout],
         push_constant_ranges: Vec<PushConstantRange>,
     ) -> Result<PipelineLayout> {
         let lim = &device.limits();
@@ -133,7 +132,7 @@ impl PipelineLayout {
                 &mut handle,
             )?;
         }
-        let set_layouts = set_layouts.iter().map(|s| s.clone()).collect();
+        let set_layouts = set_layouts.iter().map(|&s| s.clone()).collect();
         let push_constant_voids = find_voids(&push_constant_ranges)?;
         Ok(PipelineLayout {
             handle: handle.unwrap(),
@@ -167,7 +166,7 @@ fn find_voids(ranges: &[PushConstantRange]) -> Result<Vec<Range<u32>>> {
 }
 
 fn matching_resources(
-    sets: &[DescriptorSetLayout], descriptor_type: DescriptorType,
+    sets: &[&DescriptorSetLayout], descriptor_type: DescriptorType,
     stage_flags: ShaderStageFlags,
 ) -> u32 {
     sets.iter().map(|s| s.num_bindings(descriptor_type, stage_flags)).sum()

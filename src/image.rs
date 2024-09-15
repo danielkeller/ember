@@ -8,8 +8,10 @@
 
 use crate::enums::*;
 use crate::error::{Error, Result};
+use crate::ext::khr_swapchain::SwapchainInner;
 use crate::memory::{DeviceMemory, MemoryInner};
 use crate::render_pass::{RenderPass, RenderPassCompat};
+use crate::subobject::Subobject;
 use crate::types::*;
 use crate::vk::Device;
 
@@ -29,10 +31,17 @@ pub struct ImageWithoutMemory {
     device: Device,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
-struct ImageInner {
+enum ImageBacking {
+    Memory(Arc<MemoryInner>),
+    Swapchain(Arc<Subobject<SwapchainInner>>),
+}
+
+#[derive(Debug)]
+pub(crate) struct ImageInner {
     inner: ImageWithoutMemory,
-    memory: Option<Arc<MemoryInner>>,
+    _memory: ImageBacking,
 }
 
 /// An
@@ -40,7 +49,7 @@ struct ImageInner {
 /// with memory attached to it.
 #[derive(Debug)]
 pub struct Image {
-    inner: Arc<ImageInner>,
+    pub(crate) inner: Arc<ImageInner>,
 }
 
 #[derive(Debug)]
@@ -54,6 +63,8 @@ struct ImageViewInner {
 #[derive(Debug)]
 pub struct ImageView {
     inner: Arc<ImageViewInner>,
+    // Embed Ref<'static, VkImageView> here to allow deriving descriptor
+    // templates and layouts.
 }
 
 /// A
@@ -62,7 +73,7 @@ pub struct ImageView {
 pub struct Framebuffer {
     handle: Handle<VkFramebuffer>,
     render_pass_compat: RenderPassCompat,
-    attachments: Vec<Arc<ImageViewInner>>,
+    _attachments: Vec<ImageView>,
     device: Device,
 }
 
@@ -241,16 +252,15 @@ impl Image {
                 offset,
             )?;
         }
-        let inner =
-            Arc::new(ImageInner { inner: image, memory: Some(memory.inner()) });
+        let _memory = ImageBacking::Memory(memory.inner());
+        let inner = Arc::new(ImageInner { inner: image, _memory });
         Ok(Self { inner })
     }
 
-    /// Create an unowned image, for use by the swapchain. The caller must give
-    /// the result an appropriate lifetime.
-    pub(crate) unsafe fn new_from(
+    pub(crate) fn new_from_swapchain(
         handle: Handle<VkImage>, device: Device, format: Format,
         extent: Extent3D, array_layers: u32, usage: ImageUsageFlags,
+        backing: Arc<Subobject<SwapchainInner>>,
     ) -> Self {
         let inner = ImageWithoutMemory {
             handle,
@@ -262,7 +272,8 @@ impl Image {
             mip_levels: 1,
             owned: false,
         };
-        let inner = Arc::new(ImageInner { inner, memory: None });
+        let _memory = ImageBacking::Swapchain(backing);
+        let inner = Arc::new(ImageInner { inner, _memory });
         Self { inner }
     }
 
@@ -329,6 +340,14 @@ impl ImageView {
     pub fn handle(&self) -> Ref<VkImageView> {
         self.inner.handle.borrow()
     }
+
+    pub fn image(&self) -> &Image {
+        self
+    }
+
+    pub(crate) fn clone(&self) -> ImageView {
+        Self { inner: self.inner.clone() }
+    }
 }
 
 impl Framebuffer {
@@ -368,12 +387,11 @@ impl Framebuffer {
                 &mut handle,
             )?;
         }
-        let attachments =
-            attachments.iter().map(|iv| iv.inner.clone()).collect();
+        let attachments = attachments.iter().map(|&iv| iv.clone()).collect();
         Ok(Self {
             handle: handle.unwrap(),
             render_pass_compat: render_pass.compat.clone(),
-            attachments,
+            _attachments: attachments,
             device: render_pass.device().clone(),
         })
     }

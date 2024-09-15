@@ -15,7 +15,8 @@ use crate::error::{Error, Result};
 use crate::ffi::ArrayMut;
 use crate::image::Image;
 use crate::queue::{Queue, SubmitScope};
-use crate::semaphore::{Semaphore, SignalledSemaphore};
+use crate::semaphore::Semaphore;
+use crate::subobject::Owner;
 use crate::types::*;
 
 use super::khr_surface::SurfaceKHR;
@@ -57,26 +58,21 @@ impl<'a> Default for SwapchainCreateInfoKHR<'a> {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct SwapchainInner {
+    handle: Handle<VkSwapchainKHR>,
+    device: Device,
+    fun: SwapchainKHRFn,
+}
+
 /// A
 #[doc = crate::spec_link!("swapchain", "33", "_wsi_swapchain")]
 #[derive(Debug)]
 pub struct SwapchainKHR {
-    handle: Handle<VkSwapchainKHR>,
-    device: Device,
-    fun: SwapchainKHRFn,
+    inner: Owner<SwapchainInner>,
     images: Vec<Image>,
-    semaphores: Vec<Semaphore>,
+    image_acquired: Vec<bool>,
     surface: SurfaceKHR,
-}
-
-// Maybe it would be more conveient to just make Swapchain !Sync.
-pub struct SwapchainImages<'chain> {
-    handle: Mut<'chain, VkSwapchainKHR>,
-    fun: &'chain SwapchainKHRFn,
-    device: &'chain Device,
-    images: &'chain [Image],
-    semaphores: Vec<Mut<'chain, VkSemaphore>>,
-    semahpore_num: usize,
 }
 
 impl SwapchainKHR {
@@ -84,44 +80,43 @@ impl SwapchainKHR {
     ///
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
     pub fn new(
-        device: &Device, mut surface: SurfaceKHR, info: &SwapchainCreateInfoKHR,
+        device: &Device, surface: SurfaceKHR, info: &SwapchainCreateInfoKHR,
     ) -> Result<Self> {
         let fun = SwapchainKHRFn::new(device);
-        let handle = Self::create(device, &mut surface, &fun, info, None)?;
-        let mut this = Self {
-            handle,
-            device: device.clone(),
-            fun,
-            images: vec![],
-            semaphores: vec![],
-            surface,
-        };
-        this.new_impl(info)?;
-        Ok(this)
+        Self::create(device, surface, fun, info, None)
     }
 
-    /// The current swapchain is destroyed after the new one is created.
+    /// [ImageView]s, [Framebuffer]s, and so on which refer to images that are
+    /// not acquired must be dropped before calling this function, or it will
+    /// panic.
     ///
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
-    pub fn recreate(&mut self, info: &SwapchainCreateInfoKHR) -> Result<()> {
-        // I think this puts 'self' in a bad state if this fails...
-        let handle = Self::create(
-            &self.device,
-            &mut self.surface,
-            &self.fun,
+    pub fn recreate(mut self, info: &SwapchainCreateInfoKHR) -> Result<Self> {
+        let inner = &mut *self.inner;
+        for (i, image) in self.images.iter_mut().enumerate() {
+            if !self.image_acquired[i]
+                && Arc::get_mut(&mut image.inner).is_none()
+            {
+                panic!(
+                    "Cannot recreate swapchain until all references to \
+                    non-acquired images are dropped."
+                )
+            }
+        }
+        Self::create(
+            &inner.device,
+            self.surface,
+            inner.fun.clone(),
             info,
-            Some(self.handle.borrow_mut()),
-        )?;
-        unsafe { self.destroy() };
-        self.handle = handle;
-        self.new_impl(info)
+            Some(inner.handle.borrow_mut()),
+        )
     }
 
     fn create(
-        device: &Device, surface: &mut SurfaceKHR, fun: &SwapchainKHRFn,
+        device: &Device, mut surface: SurfaceKHR, fun: SwapchainKHRFn,
         info: &SwapchainCreateInfoKHR,
         old_swapchain: Option<Mut<VkSwapchainKHR>>,
-    ) -> Result<Handle<VkSwapchainKHR>> {
+    ) -> Result<Self> {
         let mut handle = None;
         unsafe {
             (fun.create_swapchain_khr)(
@@ -149,76 +144,81 @@ impl SwapchainKHR {
                 &mut handle,
             )?;
         }
-        Ok(handle.unwrap())
-    }
+        let handle = handle.unwrap();
 
-    fn new_impl(&mut self, info: &SwapchainCreateInfoKHR) -> Result<()> {
         let mut n_images = 0;
         let mut images = vec![];
         unsafe {
-            (self.fun.get_swapchain_images_khr)(
-                self.device.handle(),
-                self.handle.borrow(),
+            (fun.get_swapchain_images_khr)(
+                device.handle(),
+                handle.borrow(),
                 &mut n_images,
                 None,
             )?;
             images.reserve(n_images as usize);
-            (self.fun.get_swapchain_images_khr)(
-                self.device.handle(),
-                self.handle.borrow(),
+            (fun.get_swapchain_images_khr)(
+                device.handle(),
+                handle.borrow(),
                 &mut n_images,
                 ArrayMut::from_slice(images.spare_capacity_mut()),
             )?;
             images.set_len(n_images as usize);
         }
 
-        self.images = unsafe {
-            images
-                .into_iter()
-                .map(|handle| {
-                    Image::new_from(
-                        handle,
-                        self.device.clone(),
-                        info.image_format,
-                        info.image_extent.into(),
-                        info.image_array_layers,
-                        info.image_usage,
-                    )
-                })
-                .collect()
-        };
-        self.semaphores.resize_with(n_images as usize, || {
-            Semaphore::new(&self.device).unwrap()
-        });
+        let inner =
+            Owner::new(SwapchainInner { handle, device: device.clone(), fun });
 
-        Ok(())
+        let images = images
+            .into_iter()
+            .map(|handle| {
+                Image::new_from_swapchain(
+                    handle,
+                    device.clone(),
+                    info.image_format,
+                    info.image_extent.into(),
+                    info.image_array_layers,
+                    info.image_usage,
+                    inner.downgrade(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        Ok(SwapchainKHR {
+            inner,
+            image_acquired: vec![false; images.len()],
+            images,
+            surface,
+        })
     }
 
-    unsafe fn destroy(&mut self) {
-        (self.fun.destroy_swapchain_khr)(
-            self.device.handle(),
-            self.handle.borrow_mut(),
-            None,
-        )
+    /// Drops the swapchain and returns the surface it was associated with. This
+    /// function still works even if the devie was lost. Note that the swapchain
+    /// will not be actually destroyed until the images that refer to it are
+    /// dropped, and attempting to associate the surface with another swapchain
+    /// before that happens will fail.
+    pub fn into_surface(self) -> SurfaceKHR {
+        self.surface
     }
 
-    pub fn images<'chain>(&'chain mut self) -> SwapchainImages<'chain> {
-        let semaphores =
-            self.semaphores.iter_mut().map(|s| s.mut_handle()).collect();
-        SwapchainImages {
-            handle: self.handle.borrow_mut(),
-            fun: &self.fun,
-            device: &self.device,
-            images: &self.images,
-            semaphores,
-            semahpore_num: 0,
-        }
+    /// Borrows the inner Vulkan handle.
+    pub fn mut_handle(&mut self) -> Mut<VkSwapchainKHR> {
+        self.inner.handle.borrow_mut()
+    }
+
+    pub fn images(&self) -> &[Image] {
+        &self.images
     }
 }
 
-impl Drop for SwapchainKHR {
+impl Drop for SwapchainInner {
     fn drop(&mut self) {
-        unsafe { self.destroy() }
+        unsafe {
+            (self.fun.destroy_swapchain_khr)(
+                self.device.handle(),
+                self.handle.borrow_mut(),
+                None,
+            )
+        }
     }
 }
 
@@ -229,16 +229,72 @@ pub enum ImageOptimality {
     Suboptimal,
 }
 
+impl<'scope> SubmitScope<'scope> {
+    /// Acquire the next image from the swapchain, and queue a semaphore wait
+    /// on the acquire.
+    pub fn acquire_next_image(
+        &mut self, swapchain: &mut SwapchainKHR, timeout: u64,
+        semaphore: &'scope mut Semaphore, wait_mask: PipelineStageFlags,
+    ) -> Result<(usize, ImageOptimality)> {
+        let inner = &mut *swapchain.inner;
+        let mut index = 0;
+        let res = unsafe {
+            (inner.fun.acquire_next_image_khr)(
+                inner.device.handle(),
+                inner.handle.borrow_mut(),
+                timeout,
+                Some(semaphore.mut_handle()),
+                None,
+                &mut index,
+            )
+        };
+        self.wait(semaphore, wait_mask);
+        let is_optimal = match res {
+            Ok(()) => ImageOptimality::Optimal,
+            Err(e) => match e.into() {
+                Error::SuboptimalHKR => ImageOptimality::Suboptimal,
+                other => return Err(other),
+            },
+        };
+        Ok((index as usize, is_optimal))
+    }
+
+    /// Present the image using the semaphore. The signal must be submitted
+    /// already.
+    pub fn present(
+        &mut self, swapchain: &mut SwapchainKHR, image: usize,
+        semaphore: &mut Semaphore,
+    ) -> Result<ImageOptimality> {
+        assert!(image < swapchain.images.len(), "'image' out of bounds");
+        let inner = &mut *swapchain.inner;
+
+        let res = unsafe {
+            (inner.fun.queue_present_khr)(
+                self.mut_handle(),
+                &PresentInfoKHR {
+                    stype: Default::default(),
+                    next: Default::default(),
+                    wait: (&[semaphore.mut_handle()]).into(),
+                    swapchains: (&[inner.handle.borrow_mut()]).into(),
+                    indices: (&[image as u32]).into(),
+                    results: None,
+                },
+            )
+        };
+        let is_optimal = match res {
+            Ok(()) => ImageOptimality::Optimal,
+            Err(e) => match e.into() {
+                Error::SuboptimalHKR => ImageOptimality::Suboptimal,
+                other => return Err(other),
+            },
+        };
+
+        Ok(is_optimal)
+    }
+}
+
+#[cfg(any())]
 impl<'chain> SwapchainImages<'chain> {
-    /// Borrows the inner Vulkan handle.
-    pub fn mut_handle(&mut self) -> Mut<VkSwapchainKHR> {
-        self.handle.reborrow_mut()
-    }
-
-    pub fn images(&self) -> &'chain [Image] {
-        &self.images
-    }
-
     /// Acquires the next swapchain image. [`Error::SuboptimalHKR`] is returned
     /// in the [`Ok`] variant.
     ///
@@ -301,44 +357,6 @@ impl<'chain> SwapchainImages<'chain> {
         };
 
         Ok(is_optimal)
-    }
-}
-
-impl<'scope> SubmitScope<'scope> {
-    pub fn acquire_next_image(
-        &mut self, swapchain: &mut SwapchainImages<'scope>, timeout: u64,
-        wait_mask: PipelineStageFlags,
-    ) -> Result<(usize, ImageOptimality)> {
-        let mut index = 0;
-        swapchain.semahpore_num =
-            (swapchain.semahpore_num + 1) % swapchain.semaphores.len();
-        let semaphore =
-            swapchain.semaphores[swapchain.semahpore_num].reborrow_mut();
-        let res = unsafe {
-            (swapchain.fun.acquire_next_image_khr)(
-                swapchain.device.handle(),
-                swapchain.handle.reborrow_mut(),
-                timeout,
-                Some(semaphore),
-                None,
-                &mut index,
-            )
-        };
-        // self.wait(semaphore, wait_mask);
-        let is_optimal = match res {
-            Ok(()) => ImageOptimality::Optimal,
-            Err(e) => match e.into() {
-                Error::SuboptimalHKR => ImageOptimality::Suboptimal,
-                other => return Err(other),
-            },
-        };
-        Ok((index as usize, is_optimal))
-    }
-
-    pub fn present(
-        &mut self, swapchain: &mut SwapchainImages<'scope>, image: usize,
-        semaphore: SignalledSemaphore<'scope>,
-    ) {
     }
 }
 

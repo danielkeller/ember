@@ -15,6 +15,7 @@ use std::pin::{pin, Pin};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
+use std::u64;
 use std::{collections::HashMap, ops::DerefMut};
 
 use anyhow::Context as _;
@@ -168,7 +169,7 @@ fn upload_data(
         dst_access_mask,
     );
     let transfer = transfer.end()?;
-    queue.submit(|s| s.command(transfer));
+    queue.scope(|s| s.command(transfer));
     Ok(())
 }
 
@@ -235,7 +236,7 @@ fn upload_image(
         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     );
     let transfer = transfer.end()?;
-    queue.submit(|s| s.command(transfer));
+    queue.scope(|s| s.command(transfer));
     Ok(())
 }
 
@@ -395,7 +396,7 @@ async fn main_loop() -> anyhow::Result<()> {
             ..Default::default()
         },
     )?;
-    let mut uniform_memory = vk::DeviceMemory::new(
+    let uniform_memory = vk::DeviceMemory::new(
         &device,
         uniform_buffer.memory_requirements().size,
         memory_type(
@@ -405,8 +406,8 @@ async fn main_loop() -> anyhow::Result<()> {
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
         ),
     )?;
-    let mut mapped = uniform_memory.map(0, size_of::<MVP>())?;
-    let uniform_buffer = vk::Buffer::new(uniform_buffer, &mapped, 0)?;
+    let mut uniform_memory = uniform_memory.map(0, size_of::<MVP>())?;
+    let uniform_buffer = vk::Buffer::new(uniform_buffer, &uniform_memory, 0)?;
 
     let image = vk::ImageWithoutMemory::new(
         &device,
@@ -537,12 +538,12 @@ async fn main_loop() -> anyhow::Result<()> {
         )?
         .end();
 
-    let pipeline_layout = vk::PipelineLayout::new(
+    let pipeline_layout = Arc::new(vk::PipelineLayout::new(
         &device,
         Default::default(),
-        &[descriptor_set_layout],
+        &[&descriptor_set_layout],
         vec![],
-    )?;
+    )?);
 
     let pipeline =
         vk::Pipeline::new_graphics(vk::GraphicsPipelineCreateInfo {
@@ -595,8 +596,8 @@ async fn main_loop() -> anyhow::Result<()> {
                 dynamic_states: vk::slice(&[vk::DynamicState::VIEWPORT]),
                 ..Default::default()
             }),
-            layout: Arc::new(pipeline_layout),
-            render_pass,
+            layout: pipeline_layout.clone(),
+            render_pass: render_pass.clone(),
             subpass: 0,
         })?;
 
@@ -653,96 +654,97 @@ async fn main_loop() -> anyhow::Result<()> {
             }
         }
 
-        let (img, _subopt) =
-            swapchain_images.acquire_next_image(&mut acquire_sem, u64::MAX)?;
-        let framebuffer = &framebuffers[img];
-        let present_sem = &mut present_semaphores[img];
+        queue.scope(|s| -> anyhow::Result<()> {
+            // let (img, _) = s.acquire_next_image(
+            //     &mut swapchain_images,
+            //     u64::MAX,
+            //     vk::PipelineStageFlags::TOP_OF_PIPE,
+            // )?;
+            let img = 0;
+            let framebuffer = &framebuffers[img];
+            let present_sem = &mut present_semaphores[img];
 
-        let time = Instant::now().duration_since(begin);
+            let time = Instant::now().duration_since(begin);
 
-        let mvp: &mut MVP = bytemuck::from_bytes_mut(mapped.as_slice_mut());
-        mvp.model = Mat4::from_rotation_y(time.as_secs_f32() * 2.0);
-        mvp.view = Mat4::look_at(
-            Vec3::new(1., 1., 1.),
-            Vec3::zero(),
-            Vec3::new(0., 1., 0.),
-        );
-        mvp.proj = ultraviolet::projection::perspective_infinite_z_vk(
-            std::f32::consts::FRAC_PI_2,
-            draw_size.width as f32 / draw_size.height as f32,
-            0.1,
-        );
-
-        cmd_pool.reset()?;
-        // let subpass = cmd_pool.allocate_secondary()?;
-        // let mut subpass = cmd_pool.begin_secondary(subpass, &render_pass, 0)?;
-        // subpass.set_viewport(&vk::Viewport {
-        //     x: 0.0,
-        //     y: 0.0,
-        //     width: draw_size.width as f32,
-        //     height: draw_size.height as f32,
-        //     min_depth: 0.0,
-        //     max_depth: 1.0,
-        // });
-        // subpass.bind_pipeline(&pipeline);
-        // subpass.bind_vertex_buffers(0, &[(&vertex_buffer, 0)])?;
-        // subpass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16)?;
-        // subpass.bind_descriptor_sets(
-        //     vk::PipelineBindPoint::GRAPHICS,
-        //     &pipeline_layout,
-        //     0,
-        //     &[&desc_set],
-        //     &[],
-        // )?;
-        // subpass.draw_indexed(6, 1, 0, 0, 0)?;
-        // let mut subpass = subpass.end()?;
-
-        let mut pass = cmd_pool.begin().begin_render_pass(
-            &render_pass,
-            &framebuffer,
-            &vk::Rect2D {
-                offset: Default::default(),
-                extent: vk::Extent2D {
-                    width: draw_size.width,
-                    height: draw_size.height,
-                },
-            },
-            &[vk::ClearValue {
-                color: vk::ClearColorValue { f32: [0.1, 0.2, 0.3, 1.0] },
-            }],
-        )?;
-        pass.set_viewport(&vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: draw_size.width as f32,
-            height: draw_size.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        });
-        pass.bind_pipeline(&pipeline);
-        pass.bind_vertex_buffers(0, [&vertex_buffer], [0])?;
-        pass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16)?;
-        pass.bind_descriptor_sets(
-            vk::PipelineBindPoint::GRAPHICS,
-            &pipeline_layout,
-            0,
-            &[&desc_set],
-            &[],
-        )?;
-        pass.draw_indexed(6, 1, 0, 0, 0)?;
-        let mut buf = pass.end()?.end()?;
-
-        let present_signal = queue.submit(|s| {
-            s.acquire_next_image(
-                &mut swapchain_images,
-                0,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
+            let mvp: &mut MVP =
+                bytemuck::from_bytes_mut(uniform_memory.as_slice_mut());
+            mvp.model = Mat4::from_rotation_y(time.as_secs_f32() * 2.0);
+            mvp.view = Mat4::look_at(
+                Vec3::new(1., 1., 1.),
+                Vec3::zero(),
+                Vec3::new(0., 1., 0.),
             );
+            mvp.proj = ultraviolet::projection::perspective_infinite_z_vk(
+                std::f32::consts::FRAC_PI_2,
+                draw_size.width as f32 / draw_size.height as f32,
+                0.1,
+            );
+
+            cmd_pool.reset()?;
+            // let subpass = cmd_pool.allocate_secondary()?;
+            // let mut subpass = cmd_pool.begin_secondary(subpass, &render_pass, 0)?;
+            // subpass.set_viewport(&vk::Viewport {
+            //     x: 0.0,
+            //     y: 0.0,
+            //     width: draw_size.width as f32,
+            //     height: draw_size.height as f32,
+            //     min_depth: 0.0,
+            //     max_depth: 1.0,
+            // });
+            // subpass.bind_pipeline(&pipeline);
+            // subpass.bind_vertex_buffers(0, &[(&vertex_buffer, 0)])?;
+            // subpass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16)?;
+            // subpass.bind_descriptor_sets(
+            //     vk::PipelineBindPoint::GRAPHICS,
+            //     &pipeline_layout,
+            //     0,
+            //     &[&desc_set],
+            //     &[],
+            // )?;
+            // subpass.draw_indexed(6, 1, 0, 0, 0)?;
+            // let mut subpass = subpass.end()?;
+
+            let mut pass = cmd_pool.begin().begin_render_pass(
+                &render_pass,
+                &framebuffer,
+                &vk::Rect2D {
+                    offset: Default::default(),
+                    extent: vk::Extent2D {
+                        width: draw_size.width,
+                        height: draw_size.height,
+                    },
+                },
+                &[vk::ClearValue {
+                    color: vk::ClearColorValue { f32: [0.1, 0.2, 0.3, 1.0] },
+                }],
+            )?;
+            pass.set_viewport(&vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: draw_size.width as f32,
+                height: draw_size.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            });
+            pass.bind_pipeline(&pipeline);
+            pass.bind_vertex_buffers(0, [&vertex_buffer], [0])?;
+            pass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16)?;
+            pass.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &pipeline_layout,
+                0,
+                &[&desc_set],
+                &[],
+            )?;
+            pass.draw_indexed(6, 1, 0, 0, 0)?;
+            let mut buf = pass.end()?.end()?;
+
             // s.wait(acquire_sem, vk::PipelineStageFlags::TOP_OF_PIPE);
             s.command(buf);
-            s.signal(&mut present_sem)
-        });
-        swapchain_images.present(&mut queue, img, present_sem)?;
+            let present_sem = s.signal(present_sem);
+            // s.present(&mut swapchain_images, img, present_sem);
+            Ok(())
+        })?;
     }
 }
 

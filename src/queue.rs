@@ -15,7 +15,7 @@ use crate::device::Device;
 use crate::error::Result;
 use crate::exclusive::Exclusive;
 use crate::ffi::{Array, Null};
-use crate::semaphore::{Semaphore, SignalledSemaphore};
+use crate::semaphore::Semaphore;
 use crate::types::*;
 use crate::vk::PipelineStageFlags;
 
@@ -76,15 +76,18 @@ impl Queue {
     }
 }
 
-pub struct SubmitScope<'env> {
-    handle: Mut<'env, VkQueue>,
+/// A builder for queue submissions. Nothing is actually submitted until either
+/// the scope ends, or [SubmitScope::submit] is called. Any values that are used
+/// by the device must live for `'scope`.
+pub struct SubmitScope<'scope> {
+    handle: Mut<'scope, VkQueue>,
     device: Device,
-    scratch: &'env bumpalo::Bump,
-    submits: BumpVec<'env, VkSubmitInfo<'env, Null>>,
-    wait: BumpVec<'env, Ref<'env, VkSemaphore>>,
-    masks: BumpVec<'env, PipelineStageFlags>,
-    commands: BumpVec<'env, Mut<'env, VkCommandBuffer>>,
-    signal: BumpVec<'env, Ref<'env, VkSemaphore>>,
+    scratch: &'scope bumpalo::Bump,
+    submits: BumpVec<'scope, VkSubmitInfo<'scope, Null>>,
+    wait: BumpVec<'scope, Ref<'scope, VkSemaphore>>,
+    masks: BumpVec<'scope, PipelineStageFlags>,
+    commands: BumpVec<'scope, Mut<'scope, VkCommandBuffer>>,
+    signal: BumpVec<'scope, Ref<'scope, VkSemaphore>>,
 }
 
 impl Drop for SubmitScope<'_> {
@@ -118,34 +121,39 @@ impl Queue {
         }
     }
 
-    pub fn submit<'scope, F, R>(&'scope mut self, f: F) -> R
+    pub fn scope<'scope, F, R>(&'scope mut self, f: F) -> R
     where
         F: FnOnce(&mut SubmitScope<'scope>) -> R,
     {
         let mut submit_scope = self.submit_scope();
         let result = f(&mut submit_scope);
-        submit_scope.flush();
+        submit_scope.submit();
         result
     }
 
     /// Scoped submit that allows new commands to be submitted before the
     /// previous ones complete. This can improve device utilization because
-    /// draining and refilling work queues on the device takes some time.
-    pub fn submit_loop<F, T>(&mut self, values: &mut [T], mut f: F)
+    /// it avoids draining and refilling the work queues on the device between
+    /// submissions. The values that are used by the submission are passed
+    /// explicitly, rather than as part of the capture as in [Queue::scope].
+    pub fn scope_loop<F, T, R>(&mut self, values: &mut [T], mut f: F) -> R
     where
         // The "escape condition" on FnMut disallows any captures from being
-        // borrowed by submission, since they must live for 's which outlives
-        // the body.
-        F: for<'scope> FnMut(&SubmitScope<'scope>, &'scope mut T) -> bool,
+        // borrowed by submission, since they must live for 'scope which
+        // outlives the body.
+        F: for<'scope> FnMut(
+            &mut SubmitScope<'scope>,
+            &'scope mut T,
+        ) -> std::ops::ControlFlow<R>,
     {
         loop {
             for value in values.iter_mut() {
                 let mut submit_scope = self.submit_scope();
                 let result = f(&mut submit_scope, value);
-                submit_scope.flush();
+                submit_scope.submit();
                 // FIXME: dropping the scope drains the queue, don't do that.
-                if !result {
-                    return;
+                if let std::ops::ControlFlow::Break(v) = result {
+                    return v;
                 }
             }
         }
@@ -172,7 +180,7 @@ impl<'scope> SubmitScope<'scope> {
     /// Call
     #[doc = crate::man_link!(vkQueueSubmit)]
     /// immediately with all commands so far (if any).
-    pub fn flush(&mut self) {
+    pub fn submit(&mut self) {
         self.advance();
 
         if !self.submits.is_empty() {
@@ -190,32 +198,35 @@ impl<'scope> SubmitScope<'scope> {
         }
     }
 
+    pub fn wait(
+        &mut self, semaphore: &'scope Semaphore, stages: PipelineStageFlags,
+    ) {
+        if !self.commands.is_empty() || !self.signal.is_empty() {
+            self.advance()
+        }
+        self.wait.push(semaphore.handle());
+        self.masks.push(stages);
+    }
     pub fn command(&mut self, command: CommandBuffer<'scope>) {
         if !self.signal.is_empty() {
             self.advance()
         }
         self.commands.push(command.into_handle());
     }
-    pub fn signal<'sem: 'scope>(
-        &mut self, semaphore: &'sem mut Semaphore,
-    ) -> SignalledSemaphore<'sem> {
+    pub fn signal(&mut self, semaphore: &'scope Semaphore) {
         self.signal.push(semaphore.handle());
-        semaphore.to_signalled()
-    }
-    pub fn wait(
-        &mut self, semaphore: SignalledSemaphore<'scope>,
-        mask: PipelineStageFlags,
-    ) {
-        if !self.commands.is_empty() || !self.signal.is_empty() {
-            self.advance()
-        }
-        self.wait.push(semaphore.into_handle());
-        self.masks.push(mask);
     }
 
     fn advance(&mut self) {
+        if self.wait.is_empty()
+            && self.commands.is_empty()
+            && self.signal.is_empty()
+        {
+            return;
+        }
+
         fn take<'b, T>(
-            vec: &mut bumpalo::collections::Vec<'b, T>, bump: &'b bumpalo::Bump,
+            vec: &mut BumpVec<'b, T>, bump: &'b bumpalo::Bump,
         ) -> &'b [T] {
             std::mem::replace(vec, bumpalo::vec![in bump]).into_bump_slice()
         }
