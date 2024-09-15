@@ -6,18 +6,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::cell::RefCell;
 use std::fmt::Debug;
 
 use crate::descriptor_set::DescriptorSetLayout;
 use crate::device::Device;
 use crate::enums::*;
 use crate::error::{Error, Result};
-use crate::exclusive::Exclusive;
+use crate::ffi::ArrayMut;
 use crate::image::Framebuffer;
 use crate::pipeline::Pipeline;
 use crate::render_pass::RenderPass;
 use crate::types::*;
-use crate::vk::ArrayMut;
 
 mod transfer;
 pub mod barrier;
@@ -26,22 +26,21 @@ mod draw;
 
 // TODO: CommandPoolSet, with reset(&mut self) and record(&self) -> CommandPool
 
-/// An object which owns a [CommandPool].
 #[derive(Debug)]
-pub struct CommandPoolLifetime {
+pub struct CommandPoolInner {
     handle: Handle<VkCommandPool>,
     buffers: Vec<Handle<VkCommandBuffer>>,
     free_buffers: Vec<usize>,
-    scratch: Exclusive<bumpalo::Bump>,
-    device: Device,
 }
 
 /// A
 #[doc = crate::spec_link!("command pool", "6", "commandbuffers-pools")]
-/// , which can be recorded on.
+/// , which can be recorded on. It uses interior mutability, so it is not [Sync].
 #[derive(Debug)]
-pub struct CommandPool<'pool> {
-    inner: &'pool mut CommandPoolLifetime,
+pub struct CommandPool {
+    inner: RefCell<CommandPoolInner>,
+    scratch: bumpalo::Bump,
+    device: Device,
 }
 
 /// A primary command buffer.
@@ -67,15 +66,16 @@ struct Bindings<'a> {
 }
 
 // TODO: Use deref to make this less repetitive?
+// TODO: Check if we really need 'rec.
 
 /// An in-progress command buffer recording, outside of a render pass.
 #[derive(Debug)]
 pub struct CommandRecording<'rec, 'pool: 'rec> {
     buffer: CommandBuffer<'pool>,
-    device: &'rec Device,
-    scratch: &'rec bumpalo::Bump,
+    pool: &'rec CommandPool,
     graphics: Bindings<'rec>,
     compute: Bindings<'rec>,
+    device: &'rec Device,
 }
 
 /// An in-progress command buffer recording, inside a render pass.
@@ -105,7 +105,7 @@ pub struct SecondaryCommandRecording<'rec, 'pool> {
     subpass: u32,
 }
 
-impl CommandPoolLifetime {
+impl CommandPool {
     /// Create a command pool. The pool is not transient, not protected, and its
     /// buffers cannot be individually reset.
     #[doc = crate::man_link!(vkCreateCommandPool)]
@@ -127,32 +127,22 @@ impl CommandPoolLifetime {
         }
         let handle = handle.unwrap();
 
-        Ok(CommandPoolLifetime {
-            handle,
-            buffers: Default::default(),
-            free_buffers: Default::default(),
+        Ok(CommandPool {
+            inner: CommandPoolInner {
+                handle,
+                buffers: Default::default(),
+                free_buffers: Default::default(),
+            }
+            .into(),
             scratch: Default::default(),
             device: device.clone(),
         })
     }
-}
 
-impl Drop for CommandPoolLifetime {
-    fn drop(&mut self) {
-        unsafe {
-            (self.device.fun().destroy_command_pool)(
-                self.device.handle(),
-                self.handle.borrow_mut(),
-                None,
-            )
-        }
-    }
-}
-
-impl CommandPoolLifetime {
-    fn reserve(&mut self, additional: u32) {
-        self.buffers.reserve(additional as usize);
-        let old_len = self.buffers.len();
+    fn reserve(&self, additional: u32) {
+        let inner = &mut *self.inner.borrow_mut();
+        inner.buffers.reserve(additional as usize);
+        let old_len = inner.buffers.len();
         let new_len = old_len + additional as usize;
         unsafe {
             (self.device.fun().allocate_command_buffers)(
@@ -160,62 +150,55 @@ impl CommandPoolLifetime {
                 &CommandBufferAllocateInfo {
                     stype: Default::default(),
                     next: Default::default(),
-                    pool: self.handle.borrow_mut(),
+                    pool: inner.handle.borrow_mut(),
                     level: CommandBufferLevel::PRIMARY,
                     count: additional,
                 },
-                ArrayMut::from_slice(self.buffers.spare_capacity_mut())
+                ArrayMut::from_slice(inner.buffers.spare_capacity_mut())
                     .unwrap(),
             )
             .unwrap();
-            self.buffers.set_len(new_len);
+            inner.buffers.set_len(new_len);
         }
-        self.free_buffers.extend(old_len..new_len);
-    }
-
-    /// Borrows the inner Vulkan handle.
-    pub fn handle_mut(&mut self) -> Mut<VkCommandPool> {
-        self.handle.borrow_mut()
+        inner.free_buffers.extend(old_len..new_len);
     }
 
     fn len(&self) -> usize {
-        self.buffers.len()
+        self.inner.borrow().buffers.len()
     }
-}
 
-impl CommandPoolLifetime {
     /// Resets the pool and adds all command buffers to the free list.
     #[doc = crate::man_link!(vkResetCommandPool)]
-    pub fn reset<'pool>(&'pool mut self) -> Result<CommandPool<'pool>> {
+    pub fn reset(&mut self) -> Result<()> {
+        let inner = self.inner.get_mut();
         unsafe {
             (self.device.fun().reset_command_pool)(
                 self.device.handle(),
-                self.handle.borrow_mut(),
+                inner.handle.borrow_mut(),
                 Default::default(),
             )?;
         }
-        self.free_buffers.clear();
-        self.free_buffers.extend(0..self.len());
-        self.scratch.get_mut().reset();
-        Ok(CommandPool { inner: self })
+        inner.free_buffers.clear();
+        inner.free_buffers.extend(0..inner.buffers.len());
+        self.scratch.reset();
+        Ok(())
     }
-}
 
-impl<'pool> CommandPool<'pool> {
     /// Begin a command buffer, allocating a new one if one is not available on the free list. Command buffers have ONE_TIME_SUBMIT set.
     #[doc = crate::man_link!(vkAllocateCommandBuffers)]
     #[doc = crate::man_link!(vkBeginCommandBuffer)]
-    pub fn begin<'rec>(&'rec mut self) -> CommandRecording<'rec, 'pool> {
-        if self.inner.free_buffers.is_empty() {
-            self.inner.reserve(1)
+    pub fn begin<'rec, 'pool>(&'pool self) -> CommandRecording<'rec, 'pool> {
+        if self.inner.borrow().free_buffers.is_empty() {
+            self.reserve(1)
         }
-        let buffer = self.inner.free_buffers.pop().unwrap();
+        let inner = &mut *self.inner.borrow_mut();
+        let buffer = inner.free_buffers.pop().unwrap();
         // Safety: Moving the Handle<> doesn't actually invalidate the reference.
         let mut buffer: Mut<'pool, VkCommandBuffer> = unsafe {
-            self.inner.buffers[buffer].borrow_mut().reborrow_mut_unchecked()
+            inner.buffers[buffer].borrow_mut().reborrow_mut_unchecked()
         };
         unsafe {
-            (self.inner.device.fun().begin_command_buffer)(
+            (self.device.fun().begin_command_buffer)(
                 buffer.reborrow_mut(),
                 &CommandBufferBeginInfo {
                     flags: CommandBufferUsageFlags::ONE_TIME_SUBMIT,
@@ -224,13 +207,12 @@ impl<'pool> CommandPool<'pool> {
             )
             .unwrap();
         }
-        let scratch = self.inner.scratch.get_mut();
         CommandRecording {
             buffer: CommandBuffer(buffer),
-            device: &self.inner.device,
-            scratch,
-            graphics: Bindings::new(scratch),
-            compute: Bindings::new(scratch),
+            pool: self,
+            graphics: Bindings::new(&self.scratch),
+            compute: Bindings::new(&self.scratch),
+            device: &self.device,
         }
     }
     /*
@@ -299,12 +281,23 @@ impl<'pool> CommandPool<'pool> {
     */
 }
 
+impl Drop for CommandPool {
+    fn drop(&mut self) {
+        unsafe {
+            (self.device.fun().destroy_command_pool)(
+                self.device.handle(),
+                self.inner.get_mut().handle.borrow_mut(),
+                None,
+            )
+        }
+    }
+}
+
 impl<'a> CommandBuffer<'a> {
     pub fn handle_mut(&mut self) -> Mut<VkCommandBuffer> {
         self.0.reborrow_mut()
     }
 
-    // Just get rid of the type?
     pub fn into_handle(self) -> Mut<'a, VkCommandBuffer> {
         self.0
     }

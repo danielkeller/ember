@@ -83,13 +83,14 @@ fn required_instance_extensions() -> anyhow::Result<Vec<vk::Str<'static>>> {
     Ok(result)
 }
 
-fn pick_physical_device(phys: &[vk::PhysicalDevice]) -> &vk::PhysicalDevice {
+fn pick_physical_device(phys: &[vk::PhysicalDevice]) -> vk::PhysicalDevice {
     let discr = vk::PhysicalDeviceType::DISCRETE_GPU;
     let int = vk::PhysicalDeviceType::INTEGRATED_GPU;
     phys.iter()
         .find(|p| p.properties().device_type == discr)
         .or_else(|| phys.iter().find(|p| p.properties().device_type == int))
         .unwrap_or(&phys[0])
+        .clone()
 }
 
 fn pick_queue_family(
@@ -131,9 +132,9 @@ fn memory_type(
 }
 
 fn upload_data(
-    device: &vk::Device, queue: &mut vk::Queue,
-    cmd_pool: &mut vk::CommandPoolLifetime, src: &[u8], dst: &vk::Buffer,
-    dst_stage_mask: vk::PipelineStageFlags, dst_access_mask: vk::AccessFlags,
+    device: &vk::Device, queue: &mut vk::Queue, cmd_pool: &vk::CommandPool,
+    src: &[u8], dst: &vk::Buffer, dst_stage_mask: vk::PipelineStageFlags,
+    dst_access_mask: vk::AccessFlags,
 ) -> anyhow::Result<()> {
     let staging_buffer = vk::BufferWithoutMemory::new(
         device,
@@ -154,8 +155,7 @@ fn upload_data(
     let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
     memory.as_slice_mut().copy_from_slice(src);
 
-    let mut recording_session = cmd_pool.reset()?;
-    let mut transfer = recording_session.begin();
+    let mut transfer = cmd_pool.begin();
     transfer.copy_buffer(
         &staging_buffer,
         dst,
@@ -174,7 +174,7 @@ fn upload_data(
 
 fn upload_image(
     device: &vk::Device, queue: &mut vk::Queue, image: &vk::Image,
-    cmd_pool: &mut vk::CommandPoolLifetime,
+    cmd_pool: &vk::CommandPool,
 ) -> anyhow::Result<()> {
     let image_file = std::fs::File::open("assets/texture.jpg")?;
     let mut image_data =
@@ -206,8 +206,7 @@ fn upload_image(
     }
     memory.unmap();
 
-    let recording_session = &mut cmd_pool.reset()?;
-    let mut transfer = recording_session.begin();
+    let mut transfer = cmd_pool.begin();
     transfer.image_barrier(
         image,
         vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -272,7 +271,7 @@ async fn main_loop() -> anyhow::Result<()> {
         ..Default::default()
     })?;
 
-    let mut surf = maia::window::create_surface(&inst, &window, &window)?;
+    let surf = maia::window::create_surface(&inst, &window, &window)?;
 
     let phy = pick_physical_device(&inst.enumerate_physical_devices()?);
     let queue_family = pick_queue_family(&phy, &surf, &window)?;
@@ -286,7 +285,7 @@ async fn main_loop() -> anyhow::Result<()> {
     }
 
     let device_extensions = required_device_extensions(&phy)?;
-    let device = vk::Device::new(
+    let (device, mut queues) = vk::Device::new(
         &phy,
         &vk::DeviceCreateInfo {
             queue_create_infos: vk::slice(&[vk::DeviceQueueCreateInfo {
@@ -303,7 +302,7 @@ async fn main_loop() -> anyhow::Result<()> {
             ..Default::default()
         },
     )?;
-    let mut queue = device.take_queues()[0].pop().unwrap();
+    let mut queue = queues.remove(0).remove(0);
 
     let mut acquire_sem = vk::Semaphore::new(&device)?;
 
@@ -329,7 +328,7 @@ async fn main_loop() -> anyhow::Result<()> {
         vk::Semaphore::new(&device)?,
     ];
 
-    let mut cmd_pool = vk::CommandPoolLifetime::new(&device, queue_family)?;
+    let mut cmd_pool = vk::CommandPool::new(&device, queue_family)?;
 
     let vertex_size = std::mem::size_of_val(&VERTEX_DATA);
     let index_size = std::mem::size_of_val(&INDEX_DATA);
@@ -674,7 +673,7 @@ async fn main_loop() -> anyhow::Result<()> {
             0.1,
         );
 
-        let mut cmd_pool = cmd_pool.reset()?;
+        cmd_pool.reset()?;
         // let subpass = cmd_pool.allocate_secondary()?;
         // let mut subpass = cmd_pool.begin_secondary(subpass, &render_pass, 0)?;
         // subpass.set_viewport(&vk::Viewport {

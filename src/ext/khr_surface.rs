@@ -14,15 +14,7 @@ use crate::error::{Error, Result};
 use crate::ffi::ArrayMut;
 use crate::instance::Instance;
 use crate::physical_device::PhysicalDevice;
-use crate::subobject::{Owner, Subobject};
 use crate::types::*;
-
-#[derive(Debug)]
-pub struct SurfaceLifetime {
-    handle: Handle<VkSurfaceKHR>,
-    fun: SurfaceKHRFn,
-    instance: Instance,
-}
 
 /// A
 #[doc = crate::spec_link!("surface", "33", "_wsi_surface")]
@@ -30,10 +22,12 @@ pub struct SurfaceLifetime {
 /// Can be created with [`crate::window::create_surface`].
 #[derive(Debug)]
 pub struct SurfaceKHR {
-    inner: Owner<SurfaceLifetime>,
+    handle: Handle<VkSurfaceKHR>,
+    fun: SurfaceKHRFn,
+    instance: Instance,
 }
 
-impl Drop for SurfaceLifetime {
+impl Drop for SurfaceKHR {
     fn drop(&mut self) {
         unsafe {
             (self.fun.destroy_surface_khr)(
@@ -49,25 +43,19 @@ impl SurfaceKHR {
     /// Create a surface from an existing handle.
     pub fn new(handle: Handle<VkSurfaceKHR>, instance: &Instance) -> Self {
         Self {
-            inner: Owner::new(SurfaceLifetime {
-                handle,
-                fun: SurfaceKHRFn::new(&instance),
-                instance: instance.clone(),
-            }),
+            handle,
+            fun: SurfaceKHRFn::new(&instance),
+            instance: instance.clone(),
         }
     }
 
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkSurfaceKHR> {
-        self.inner.handle.borrow()
+        self.handle.borrow()
     }
     /// Borrows the inner Vulkan handle.
     pub fn mut_handle(&mut self) -> Mut<VkSurfaceKHR> {
-        self.inner.handle.borrow_mut()
-    }
-    /// Extend the lifetime of the surface until the returned object is dropped.
-    pub(crate) fn resource(&self) -> Subobject<SurfaceLifetime> {
-        Subobject::new(&self.inner)
+        self.handle.borrow_mut()
     }
 
     /// Returns true if the surface supports `phy` on `queue_family`. Returns
@@ -77,12 +65,12 @@ impl SurfaceKHR {
         &self, phy: &PhysicalDevice, queue_family: u32,
     ) -> Result<bool> {
         let mut result = Bool::False;
-        assert_eq!(&self.inner.instance, phy.instance());
+        assert_eq!(&self.instance, phy.instance());
         if (queue_family as usize) >= phy.queue_family_properties().len() {
             return Err(Error::OutOfBounds);
         }
         unsafe {
-            (self.inner.fun.get_physical_device_surface_support_khr)(
+            (self.fun.get_physical_device_surface_support_khr)(
                 phy.handle(),
                 queue_family,
                 self.handle(),
@@ -96,11 +84,11 @@ impl SurfaceKHR {
     pub fn capabilities(
         &self, phy: &PhysicalDevice,
     ) -> Result<SurfaceCapabilitiesKHR> {
-        assert_eq!(&self.inner.instance, phy.instance());
+        assert_eq!(&self.instance, phy.instance());
         // Check phy support?
         let mut result = MaybeUninit::uninit();
         unsafe {
-            (self.inner.fun.get_physical_device_surface_capabilities_khr)(
+            (self.fun.get_physical_device_surface_capabilities_khr)(
                 phy.handle(),
                 self.handle(),
                 &mut result,
@@ -113,18 +101,18 @@ impl SurfaceKHR {
     pub fn surface_formats(
         &self, phy: &PhysicalDevice,
     ) -> Result<Vec<SurfaceFormatKHR>> {
-        assert_eq!(&self.inner.instance, phy.instance());
+        assert_eq!(&self.instance, phy.instance());
         let mut len = 0;
         let mut result = vec![];
         unsafe {
-            (self.inner.fun.get_physical_device_surface_formats_khr)(
+            (self.fun.get_physical_device_surface_formats_khr)(
                 phy.handle(),
                 self.handle(),
                 &mut len,
                 None,
             )?;
             result.reserve(len as usize);
-            (self.inner.fun.get_physical_device_surface_formats_khr)(
+            (self.fun.get_physical_device_surface_formats_khr)(
                 phy.handle(),
                 self.handle(),
                 &mut len,

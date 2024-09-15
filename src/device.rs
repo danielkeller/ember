@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::error::{Error, Result};
 use crate::instance::Instance;
@@ -26,7 +26,6 @@ struct Impl {
     memory_allocation_count: AtomicU32,
     sampler_allocation_count: AtomicU32,
     queues: Vec<u32>,
-    queues_taken: AtomicBool,
     // Maybe include device_lost so we don't double panic all the time
 }
 
@@ -69,7 +68,7 @@ impl Device {
     #[doc = crate::man_link!(vkCreateDevice)]
     pub fn new(
         phy: &PhysicalDevice, info: &DeviceCreateInfo<'_>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, Vec<Vec<Queue>>)> {
         let props = phy.queue_family_properties();
         let mut queues = vec![0; props.len()];
         for q in info.queue_create_infos {
@@ -93,7 +92,7 @@ impl Device {
         }
         let handle = handle.unwrap();
         let fun = DeviceFn::new(phy.instance(), handle.borrow());
-        Ok(Device {
+        let this = Device {
             inner: Arc::new(Impl {
                 handle,
                 fun,
@@ -103,22 +102,16 @@ impl Device {
                 memory_allocation_count: 0.into(),
                 sampler_allocation_count: 0.into(),
                 queues,
-                queues_taken: false.into(),
             }),
-        })
-    }
-
-    /// Return the device's queues. Will panic if called more than once.
-    pub fn take_queues(&self) -> Vec<Vec<Queue>> {
-        if self.inner.queues_taken.swap(true, Ordering::Relaxed) {
-            panic!("Device::take_queues called more than once.");
-        }
-        self.inner
+        };
+        let queues = this
+            .inner
             .queues
             .iter()
             .enumerate()
-            .map(|(i, &n)| (0..n).map(|n| self.queue(i as u32, n)).collect())
-            .collect()
+            .map(|(i, &n)| (0..n).map(|n| this.queue(i as u32, n)).collect())
+            .collect();
+        Ok((this, queues))
     }
 
     /// Get the device functions.
@@ -154,7 +147,6 @@ impl Device {
         i < self.inner.queues.len() && self.inner.queues[i] >= queue_index
     }
     pub(crate) fn increment_memory_alloc_count(&self) -> Result<()> {
-        use std::sync::atomic::Ordering;
         // Reserve allocation number 'val'.
         // Overflow is incredibly unlikely here
         let val =
@@ -167,11 +159,9 @@ impl Device {
         }
     }
     pub(crate) fn decrement_memory_alloc_count(&self) {
-        use std::sync::atomic::Ordering;
         self.inner.memory_allocation_count.fetch_sub(1, Ordering::Relaxed);
     }
     pub(crate) fn increment_sampler_alloc_count(&self) -> Result<()> {
-        use std::sync::atomic::Ordering;
         // Reserve allocation number 'val'.
         // Overflow is incredibly unlikely here
         let val =
@@ -184,7 +174,6 @@ impl Device {
         }
     }
     pub(crate) fn decrement_sampler_alloc_count(&self) {
-        use std::sync::atomic::Ordering;
         self.inner.sampler_allocation_count.fetch_sub(1, Ordering::Relaxed);
     }
 }

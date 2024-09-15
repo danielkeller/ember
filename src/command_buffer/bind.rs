@@ -274,8 +274,10 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
             );
         }
 
-        let sets =
-            self.scratch.alloc_slice_fill_iter(sets.iter().map(|s| s.handle()));
+        let sets = self
+            .pool
+            .scratch
+            .alloc_slice_fill_iter(sets.iter().map(|s| s.handle()));
         unsafe {
             (self.device.fun().cmd_bind_descriptor_sets)(
                 self.buffer.handle_mut(),

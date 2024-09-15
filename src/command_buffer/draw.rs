@@ -358,7 +358,7 @@ impl<'rec, 'pool> ExternalRenderPassRecording<'rec, 'pool> {
     pub fn execute_commands(
         &mut self, commands: &mut [&'pool mut SecondaryCommandBuffer],
     ) -> Result<()> {
-        let mut handles = bumpalo::vec![in self.rec.scratch];
+        let mut handles = bumpalo::vec![in &self.rec.pool.scratch];
         for command in commands.iter_mut() {
             if !self.pass.compatible(command.pass.as_deref().unwrap())
                 || self.subpass != command.subpass

@@ -235,7 +235,7 @@ pub(crate) fn test_device() -> Result<(Arc<device::Device>, queue::Queue)> {
 pub mod vk {
     pub use crate::buffer::{Buffer, BufferWithoutMemory};
     pub use crate::command_buffer::{
-        CommandBuffer, CommandPoolLifetime, CommandRecording,
+        CommandBuffer, CommandPool, CommandRecording,
         ExternalRenderPassRecording, RenderPassRecording,
         SecondaryCommandBuffer, SecondaryCommandRecording,
     };

@@ -87,6 +87,7 @@ impl<T: Copy> Handle<T> {
     pub fn borrow(&self) -> Ref<'_, T> {
         Ref { _value: self._value, _lt: PhantomData }
     }
+    // TODO: I think it should be called get_mut?
     /// Mutably borrow the object
     pub fn borrow_mut(&mut self) -> Mut<'_, T> {
         Mut { _value: self._value, _lt: PhantomData }
