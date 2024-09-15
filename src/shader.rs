@@ -20,7 +20,7 @@ pub struct ShaderModule {
 
 impl ShaderModule {
     #[doc = crate::man_link!(vkCreateShaderModule)]
-    pub fn new(device: Device, code: &[u32]) -> Result<Self> {
+    pub fn new(device: &Device, code: &[u32]) -> Result<Self> {
         if code.is_empty() {
             return Err(Error::InvalidArgument);
         }

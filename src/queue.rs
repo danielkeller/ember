@@ -118,9 +118,9 @@ impl Queue {
         }
     }
 
-    pub fn submit<F, R>(&mut self, f: F) -> R
+    pub fn submit<'scope, F, R>(&'scope mut self, f: F) -> R
     where
-        F: FnOnce(&mut SubmitScope) -> R,
+        F: FnOnce(&mut SubmitScope<'scope>) -> R,
     {
         let mut submit_scope = self.submit_scope();
         let result = f(&mut submit_scope);
@@ -136,7 +136,7 @@ impl Queue {
         // The "escape condition" on FnMut disallows any captures from being
         // borrowed by submission, since they must live for 's which outlives
         // the body.
-        F: for<'s> FnMut(&SubmitScope<'s>, &'s mut T) -> bool,
+        F: for<'scope> FnMut(&SubmitScope<'scope>, &'scope mut T) -> bool,
     {
         loop {
             for value in values.iter_mut() {

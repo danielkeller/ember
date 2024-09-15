@@ -51,7 +51,7 @@ pub struct DescriptorSetLayoutBinding {
     pub descriptor_type: DescriptorType,
     pub descriptor_count: u32,
     pub stage_flags: ShaderStageFlags,
-    pub immutable_samplers: Vec<Sampler>,
+    pub immutable_samplers: Vec<Sampler>, // TODO: Support sharing.
 }
 
 impl DescriptorSetLayout {
@@ -181,6 +181,7 @@ impl DescriptorSetLayout {
 
 /// A
 #[doc = crate::spec_link!("descriptor pool", "14", "descriptorsets-allocation")]
+/// . It uses interior mutability, so it is not [Sync].
 pub struct DescriptorPool {
     handle: Handle<VkDescriptorPool>,
     device: Device,

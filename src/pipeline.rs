@@ -242,8 +242,8 @@ pub struct GraphicsPipelineCreateInfo<'a> {
     pub depth_stencil_state: Option<&'a PipelineDepthStencilStateCreateInfo>,
     pub color_blend_state: &'a PipelineColorBlendStateCreateInfo<'a>,
     pub dynamic_state: Option<&'a PipelineDynamicStateCreateInfo<'a>>,
-    pub layout: &'a Arc<PipelineLayout>,
-    pub render_pass: &'a Arc<RenderPass>,
+    pub layout: Arc<PipelineLayout>,
+    pub render_pass: Arc<RenderPass>,
     pub subpass: u32,
 }
 
@@ -256,7 +256,7 @@ impl Pipeline {
     /// attributes refer to a nonexistent binding.
     #[doc = crate::man_link!(vkCreateGraphicsPipeline)]
     pub fn new_graphics(
-        info: &GraphicsPipelineCreateInfo<'_>,
+        info: GraphicsPipelineCreateInfo<'_>,
     ) -> Result<Arc<Self>> {
         let lim = info.render_pass.device.limits();
         if info.subpass >= info.render_pass.num_subpasses() {
@@ -336,7 +336,7 @@ impl Pipeline {
         }
         Ok(Arc::new(Pipeline {
             handle: unsafe { handle.assume_init() },
-            layout: info.layout.clone(),
+            layout: info.layout,
             render_pass: Some(info.render_pass.clone()),
             subpass: info.subpass,
         }))

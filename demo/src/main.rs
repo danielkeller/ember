@@ -18,7 +18,7 @@ use std::time::Instant;
 use std::{collections::HashMap, ops::DerefMut};
 
 use anyhow::Context as _;
-use maia::vk::{self, BufferWithoutMemory};
+use maia::vk;
 use scoped_tls::scoped_thread_local;
 use ultraviolet::{Mat4, Vec3};
 use winit::event::WindowEvent;
@@ -83,13 +83,10 @@ fn required_instance_extensions() -> anyhow::Result<Vec<vk::Str<'static>>> {
     Ok(result)
 }
 
-fn pick_physical_device<'i>(
-    phys: &[vk::PhysicalDevice<'i>],
-) -> vk::PhysicalDevice<'i> {
+fn pick_physical_device(phys: &[vk::PhysicalDevice]) -> &vk::PhysicalDevice {
     let discr = vk::PhysicalDeviceType::DISCRETE_GPU;
     let int = vk::PhysicalDeviceType::INTEGRATED_GPU;
-    *phys
-        .iter()
+    phys.iter()
         .find(|p| p.properties().device_type == discr)
         .or_else(|| phys.iter().find(|p| p.properties().device_type == int))
         .unwrap_or(&phys[0])
@@ -152,10 +149,10 @@ fn upload_data(
         vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     );
-    let mut mmemory = vk::DeviceMemory::new(device, mem_size, host_mem)?;
-    let mut memory = mmemory.map(0, src.len())?;
-    let staging_buffer = vk::Buffer::new(staging_buffer, memory.memory(), 0)?;
-    memory.write_at(0).write_all(src)?;
+    let memory = vk::DeviceMemory::new(device, mem_size, host_mem)?;
+    let mut memory = memory.map(0, src.len())?;
+    let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
+    memory.as_slice_mut().copy_from_slice(src);
 
     let mut recording_session = cmd_pool.reset()?;
     let mut transfer = recording_session.begin();
@@ -170,8 +167,8 @@ fn upload_data(
         vk::AccessFlags::TRANSFER_WRITE,
         dst_access_mask,
     );
-    let mut transfer = transfer.end()?;
-    queue.submit(|s| s.command(&mut transfer));
+    let transfer = transfer.end()?;
+    queue.submit(|s| s.command(transfer));
     Ok(())
 }
 
@@ -200,11 +197,12 @@ fn upload_image(
     );
     let mut memory = vk::DeviceMemory::new(&device, mem_size, host_mem)?;
     let mut memory = memory.map(0, mem_size as usize)?;
-    let staging_buffer = vk::Buffer::new(staging_buffer, memory.memory(), 0)?;
-    let mut writer = memory.write_at(0);
-    for src in image_data.chunks_exact(3) {
-        writer.write_all(src)?;
-        writer.write_all(&[255])?;
+    let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
+    for (src, dst) in (image_data.chunks_exact(3))
+        .zip(memory.as_slice_mut().chunks_exact_mut(4))
+    {
+        dst[0..3].clone_from_slice(src);
+        dst[4] = 255;
     }
     memory.unmap();
 
@@ -237,8 +235,8 @@ fn upload_image(
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     );
-    let mut transfer = transfer.end()?;
-    queue.submit(|s| s.command(&mut transfer));
+    let transfer = transfer.end()?;
+    queue.submit(|s| s.command(transfer));
     Ok(())
 }
 
@@ -314,8 +312,8 @@ async fn main_loop() -> anyhow::Result<()> {
         vk::Extent2D { width: window_size.width, height: window_size.height };
     let mut swapchain = vk::ext::SwapchainKHR::new(
         &device,
-        &mut surf,
-        vk::SwapchainCreateInfoKHR {
+        surf,
+        &vk::SwapchainCreateInfoKHR {
             min_image_count: 3,
             image_format: vk::Format::B8G8R8A8_SRGB,
             image_extent: swapchain_size,
@@ -409,7 +407,7 @@ async fn main_loop() -> anyhow::Result<()> {
         ),
     )?;
     let mut mapped = uniform_memory.map(0, size_of::<MVP>())?;
-    let uniform_buffer = vk::Buffer::new(uniform_buffer, mapped.memory(), 0)?;
+    let uniform_buffer = vk::Buffer::new(uniform_buffer, &mapped, 0)?;
 
     let image = vk::ImageWithoutMemory::new(
         &device,
@@ -499,7 +497,7 @@ async fn main_loop() -> anyhow::Result<()> {
                 descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 descriptor_count: 1,
                 stage_flags: vk::ShaderStageFlags::FRAGMENT,
-                immutable_samplers: vec![sampler.handle()],
+                immutable_samplers: vec![sampler],
             },
         ],
     )?;
@@ -543,12 +541,12 @@ async fn main_loop() -> anyhow::Result<()> {
     let pipeline_layout = vk::PipelineLayout::new(
         &device,
         Default::default(),
-        vec![&descriptor_set_layout],
+        &[descriptor_set_layout],
         vec![],
     )?;
 
     let pipeline =
-        vk::Pipeline::new_graphics(&vk::GraphicsPipelineCreateInfo {
+        vk::Pipeline::new_graphics(vk::GraphicsPipelineCreateInfo {
             stages: &[
                 vk::PipelineShaderStageCreateInfo::vertex(&vertex_shader),
                 vk::PipelineShaderStageCreateInfo::fragment(&fragment_shader),
@@ -598,10 +596,9 @@ async fn main_loop() -> anyhow::Result<()> {
                 dynamic_states: vk::slice(&[vk::DynamicState::VIEWPORT]),
                 ..Default::default()
             }),
-            layout: &pipeline_layout,
-            render_pass: &render_pass,
+            layout: Arc::new(pipeline_layout),
+            render_pass,
             subpass: 0,
-            cache: None,
         })?;
 
     let begin = Instant::now();
@@ -623,7 +620,7 @@ async fn main_loop() -> anyhow::Result<()> {
             swapchain_size = draw_size;
             drop(framebuffers);
             drop(swapchain_imageviews);
-            swapchain.recreate(vk::SwapchainCreateInfoKHR {
+            swapchain.recreate(&vk::SwapchainCreateInfoKHR {
                 min_image_count: 3,
                 image_format: vk::Format::B8G8R8A8_SRGB,
                 image_extent: swapchain_size,
@@ -664,19 +661,18 @@ async fn main_loop() -> anyhow::Result<()> {
 
         let time = Instant::now().duration_since(begin);
 
-        mapped.write_at(0).write_all(bytemuck::bytes_of(&MVP {
-            model: Mat4::from_rotation_y(time.as_secs_f32() * 2.0),
-            view: Mat4::look_at(
-                Vec3::new(1., 1., 1.),
-                Vec3::zero(),
-                Vec3::new(0., 1., 0.),
-            ),
-            proj: ultraviolet::projection::perspective_infinite_z_vk(
-                std::f32::consts::FRAC_PI_2,
-                draw_size.width as f32 / draw_size.height as f32,
-                0.1,
-            ),
-        }))?;
+        let mvp: &mut MVP = bytemuck::from_bytes_mut(mapped.as_slice_mut());
+        mvp.model = Mat4::from_rotation_y(time.as_secs_f32() * 2.0);
+        mvp.view = Mat4::look_at(
+            Vec3::new(1., 1., 1.),
+            Vec3::zero(),
+            Vec3::new(0., 1., 0.),
+        );
+        mvp.proj = ultraviolet::projection::perspective_infinite_z_vk(
+            std::f32::consts::FRAC_PI_2,
+            draw_size.width as f32 / draw_size.height as f32,
+            0.1,
+        );
 
         let mut cmd_pool = cmd_pool.reset()?;
         // let subpass = cmd_pool.allocate_secondary()?;
@@ -738,7 +734,12 @@ async fn main_loop() -> anyhow::Result<()> {
         let mut buf = pass.end()?.end()?;
 
         let present_signal = queue.submit(|s| {
-            s.wait(acquire_sem, vk::PipelineStageFlags::TOP_OF_PIPE);
+            s.acquire_next_image(
+                &mut swapchain_images,
+                0,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+            );
+            // s.wait(acquire_sem, vk::PipelineStageFlags::TOP_OF_PIPE);
             s.command(buf);
             s.signal(&mut present_sem)
         });
@@ -751,8 +752,8 @@ impl std::task::Wake for Waker {
     fn wake(self: Arc<Self>) {}
 }
 
-struct App<F> {
-    fut: Pin<&mut F>,
+struct App<'a, F> {
+    fut: Pin<&'a mut F>,
 }
 
 scoped_thread_local!(static EVENT_LOOP: ActiveEventLoop);
@@ -776,7 +777,7 @@ async fn winit_event(f: impl Fn(&WindowEvent) -> bool) -> WindowEvent {
     .await
 }
 
-impl<F> winit::application::ApplicationHandler<()> for App<F>
+impl<'a, F> winit::application::ApplicationHandler<()> for App<'a, F>
 where
     F: Future<Output = ()>,
 {
@@ -784,7 +785,7 @@ where
         let waker = Arc::new(Waker).into();
         EVENT_LOOP.set(event_loop, || {
             if let Poll::Ready(()) =
-                self.fut.poll(&mut Context::from_waker(&waker))
+                self.fut.as_mut().poll(&mut Context::from_waker(&waker))
             {
                 event_loop.exit();
             }
@@ -799,7 +800,7 @@ where
         EVENT_LOOP.set(event_loop, || {
             WINDOW_EVENT.replace(Some(event));
             if let Poll::Ready(()) =
-                self.fut.poll(&mut Context::from_waker(&waker))
+                self.fut.as_mut().poll(&mut Context::from_waker(&waker))
             {
                 event_loop.exit();
             }
