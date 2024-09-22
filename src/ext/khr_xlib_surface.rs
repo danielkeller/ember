@@ -13,7 +13,7 @@ use std::ptr::NonNull;
 use crate::enums::*;
 use crate::types::*;
 
-use crate::error::Result;
+use crate::error::VkResult;
 use crate::instance::Instance;
 use crate::physical_device::PhysicalDevice;
 
@@ -48,15 +48,16 @@ impl<'i> KHRXlibSurface<'i> {
     #[doc = crate::man_link!(vkCreateXlibSurfaceKHR)]
     pub unsafe fn create_xlib_surface_ext(
         &self, info: &XlibSurfaceCreateInfoKHR,
-    ) -> Result<SurfaceKHR> {
+    ) -> SurfaceKHR {
         let mut handle = None;
         (self.fun.create_xlib_surface_khr)(
             self.instance.handle(),
             info,
             None,
             &mut handle,
-        )?;
-        Ok(SurfaceKHR::new(handle.unwrap(), self.instance))
+        )
+        .unwrap();
+        SurfaceKHR::new(handle.unwrap(), self.instance)
     }
 }
 

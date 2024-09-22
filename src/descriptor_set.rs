@@ -13,7 +13,7 @@ use std::mem::MaybeUninit;
 
 use crate::device::Device;
 use crate::enums::{DescriptorType, ShaderStageFlags};
-use crate::error::{Error, Result};
+use crate::error::OutOfPoolMemory;
 use crate::ffi::Array;
 use crate::sampler::Sampler;
 use crate::types::*;
@@ -60,17 +60,20 @@ impl DescriptorSetLayout {
     #[doc = crate::man_link!(VkDescriptorSetLayout)]
     pub fn new(
         device: &Device, bindings: Vec<DescriptorSetLayoutBinding>,
-    ) -> Result<Self> {
+    ) -> Self {
         for b in &bindings {
             if !b.immutable_samplers.is_empty()
                 && b.immutable_samplers.len() as u32 != b.descriptor_count
             {
-                return Err(Error::InvalidArgument);
+                panic!(
+                    "Immutable samplers must have either 0 or {} items",
+                    b.descriptor_count
+                );
             }
             if b.descriptor_type == DescriptorType::COMBINED_IMAGE_SAMPLER
                 && b.immutable_samplers.is_empty()
             {
-                return Err(Error::InvalidArgument);
+                panic!("Combined image samplers require immutable samplers")
             }
         }
 
@@ -104,7 +107,8 @@ impl DescriptorSetLayout {
                 },
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
 
         let inner = Arc::new(DescriptorSetLayoutInner {
@@ -112,7 +116,7 @@ impl DescriptorSetLayout {
             bindings,
             device: device.clone(),
         });
-        Ok(DescriptorSetLayout { inner })
+        DescriptorSetLayout { inner }
     }
 }
 
@@ -194,7 +198,7 @@ impl DescriptorPool {
     #[doc = crate::man_link!(vkCreateDescriptorPool)]
     pub fn new(
         device: &Device, max_sets: u32, pool_sizes: &[DescriptorPoolSize],
-    ) -> Result<Self> {
+    ) -> Self {
         let mut handle = None;
         unsafe {
             (device.fun().create_descriptor_pool)(
@@ -206,14 +210,15 @@ impl DescriptorPool {
                 },
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
-        Ok(DescriptorPool {
+        DescriptorPool {
             handle: handle.unwrap(),
             device: device.clone(),
             scratch: bumpalo::Bump::new(),
             non_sync_: PhantomData,
-        })
+        }
     }
 }
 
@@ -230,15 +235,15 @@ impl Drop for DescriptorPool {
 }
 
 impl DescriptorPool {
-    pub fn reset(&mut self) -> Result<()> {
+    pub fn reset(&mut self) {
         unsafe {
             (self.device.fun().reset_descriptor_pool)(
                 self.device.handle(),
                 self.handle.borrow_mut(),
                 Default::default(),
-            )?;
+            )
+            .unwrap();
         }
-        Ok(())
     }
 }
 
@@ -272,7 +277,14 @@ impl<'a> DescriptorSet<'a> {
     #[doc = crate::man_link!(vkAllocateDescriptorSets)]
     pub fn new(
         pool: &'a DescriptorPool, layout: &'a DescriptorSetLayout,
-    ) -> Result<Self> {
+    ) -> Self {
+        Self::try_new(pool, layout).unwrap()
+    }
+
+    #[doc = crate::man_link!(vkAllocateDescriptorSets)]
+    pub fn try_new(
+        pool: &'a DescriptorPool, layout: &'a DescriptorSetLayout,
+    ) -> Result<Self, OutOfPoolMemory> {
         assert_eq!(pool.device, layout.inner.device);
         let mut handle = MaybeUninit::uninit();
         let handle = unsafe {
@@ -285,7 +297,8 @@ impl<'a> DescriptorSet<'a> {
                     set_layouts: (&[layout.borrow()]).into(),
                 },
                 std::array::from_mut(&mut handle).into(),
-            )?;
+            )
+            .unwrap_or_oopm()?;
             handle.assume_init()
         };
         let inited = pool.scratch.alloc_slice_fill_iter(

@@ -8,7 +8,6 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::error::{Error, Result};
 use crate::instance::Instance;
 use crate::load::DeviceFn;
 use crate::physical_device::PhysicalDevice;
@@ -68,15 +67,20 @@ impl Device {
     #[doc = crate::man_link!(vkCreateDevice)]
     pub fn new(
         phy: &PhysicalDevice, info: &DeviceCreateInfo<'_>,
-    ) -> Result<(Self, Vec<Vec<Queue>>)> {
+    ) -> (Self, Vec<Vec<Queue>>) {
         let props = phy.queue_family_properties();
         let mut queues = vec![0; props.len()];
         for q in info.queue_create_infos {
             let i = q.queue_family_index as usize;
-            if i >= props.len()
-                || q.queue_priorities.len() > props[i].queue_count
-            {
-                return Err(Error::OutOfBounds);
+            if i >= props.len() {
+                panic!("Queue family index {i} out of bounds")
+            }
+            if q.queue_priorities.len() > props[i].queue_count {
+                panic!(
+                    "Too many queues for family {i}: {} > {}",
+                    q.queue_priorities.len(),
+                    props[i].queue_count
+                )
             }
             queues[i] = q.queue_priorities.len();
         }
@@ -88,7 +92,8 @@ impl Device {
                 info,
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
         let handle = handle.unwrap();
         let fun = DeviceFn::new(phy.instance(), handle.borrow());
@@ -111,7 +116,7 @@ impl Device {
             .enumerate()
             .map(|(i, &n)| (0..n).map(|n| this.queue(i as u32, n)).collect())
             .collect();
-        Ok((this, queues))
+        (this, queues)
     }
 
     /// Get the device functions.
@@ -146,31 +151,33 @@ impl Device {
         let i = queue_family_index as usize;
         i < self.inner.queues.len() && self.inner.queues[i] >= queue_index
     }
-    pub(crate) fn increment_memory_alloc_count(&self) -> Result<()> {
+    pub(crate) fn increment_memory_alloc_count(&self) {
         // Reserve allocation number 'val'.
         // Overflow is incredibly unlikely here
         let val =
             self.inner.memory_allocation_count.fetch_add(1, Ordering::Relaxed);
         if val >= self.inner.limits.max_memory_allocation_count {
             self.inner.memory_allocation_count.fetch_sub(1, Ordering::Relaxed);
-            Err(Error::LimitExceeded)
-        } else {
-            Ok(())
+            panic!(
+                "Too many memory allocations: {val} > {}",
+                self.inner.limits.max_memory_allocation_count
+            )
         }
     }
     pub(crate) fn decrement_memory_alloc_count(&self) {
         self.inner.memory_allocation_count.fetch_sub(1, Ordering::Relaxed);
     }
-    pub(crate) fn increment_sampler_alloc_count(&self) -> Result<()> {
+    pub(crate) fn increment_sampler_alloc_count(&self) {
         // Reserve allocation number 'val'.
         // Overflow is incredibly unlikely here
         let val =
             self.inner.sampler_allocation_count.fetch_add(1, Ordering::Relaxed);
         if val >= self.inner.limits.max_sampler_allocation_count {
             self.inner.sampler_allocation_count.fetch_sub(1, Ordering::Relaxed);
-            Err(Error::LimitExceeded)
-        } else {
-            Ok(())
+            panic!(
+                "Too many sampler objects: {val} > {}",
+                self.inner.limits.max_sampler_allocation_count
+            )
         }
     }
     pub(crate) fn decrement_sampler_alloc_count(&self) {

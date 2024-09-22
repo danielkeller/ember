@@ -44,7 +44,6 @@ pub mod ext;
 #[cfg(doc)]
 pub mod macos_instructions;
 
-use crate::error::Result;
 use crate::types::*;
 
 macro_rules! man_link{
@@ -192,21 +191,22 @@ fn test_the_scope() {
 }
 
 #[doc = crate::man_link!(vkEnumerateInstanceExtensionProperties)]
-pub fn instance_extension_properties() -> Result<Vec<ExtensionProperties>> {
+pub fn instance_extension_properties() -> Vec<ExtensionProperties> {
     let mut len = 0;
     let mut result = Vec::new();
     unsafe {
         let fn_ptr = load::vk_enumerate_instance_extension_properties();
-        fn_ptr(None, &mut len, None)?;
+        fn_ptr(None, &mut len, None).unwrap();
         result.reserve(len as usize);
         fn_ptr(
             None,
             &mut len,
             ffi::ArrayMut::from_slice(result.spare_capacity_mut()),
-        )?;
+        )
+        .unwrap();
         result.set_len(len as usize);
     }
-    Ok(result)
+    result
 }
 
 #[cfg(test_disabled)]
@@ -248,7 +248,7 @@ pub mod vk {
     pub use crate::device::Device;
     pub use crate::enums::Bool::{False, True};
     pub use crate::enums::*;
-    pub use crate::error::{Error, ErrorAndSelf, Result, ResultAndSelf};
+    pub use crate::error::{OutOfDeviceMemory, OutOfPoolMemory, VkResult};
     pub use crate::ext;
     pub use crate::ext::khr_swapchain::SwapchainCreateInfoKHR;
     pub use crate::fence::{Fence, PendingFence};

@@ -8,7 +8,6 @@
 
 use crate::cleanup_queue::Cleanup;
 use crate::device::Device;
-use crate::error::Result;
 use crate::types::*;
 
 /// A
@@ -33,7 +32,7 @@ pub struct PendingFence {
 
 impl Fence {
     #[doc = crate::man_link!(vkCreateFence)]
-    pub fn new(device: &Device) -> Result<Self> {
+    pub fn new(device: &Device) -> Self {
         let mut handle = None;
         unsafe {
             (device.fun().create_fence)(
@@ -41,9 +40,10 @@ impl Fence {
                 &Default::default(),
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
-        Ok(Self { handle, device: device.clone() })
+        Self { handle, device: device.clone() }
     }
 }
 
@@ -75,6 +75,7 @@ impl Fence {
     // }
 }
 
+#[cfg(any())]
 impl PendingFence {
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkFence> {

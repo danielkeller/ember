@@ -12,12 +12,12 @@ use std::fmt::Debug;
 use crate::cleanup_queue::CleanupQueue;
 use crate::command_buffer::CommandBuffer;
 use crate::device::Device;
-use crate::error::Result;
+use crate::enums::PipelineStageFlags;
+use crate::error::VkResult;
 use crate::exclusive::Exclusive;
 use crate::ffi::{Array, Null};
 use crate::semaphore::Semaphore;
 use crate::types::*;
-use crate::vk::PipelineStageFlags;
 
 /// A queue.
 ///
@@ -92,16 +92,13 @@ pub struct SubmitScope<'scope> {
 
 impl Drop for SubmitScope<'_> {
     fn drop(&mut self) {
-        if unsafe {
+        let result = unsafe {
             (self.device.fun().queue_wait_idle)(self.handle.reborrow_mut())
-        }
-        .is_err()
-        {
-            // Potentially in some cases (eg device loss) this is actually
-            // recoverable since the other destructors will fail in the same
-            // way.
-            eprintln!("vkQueueWaitIdle failed");
-            std::process::abort();
+        };
+        // Device loss counts as a success for waiting for resources to be
+        // no longer in use, so don't double-panic in that case.
+        if !(result == VkResult::DEVICE_LOST && std::thread::panicking()) {
+            result.unwrap();
         }
     }
 }
@@ -163,12 +160,12 @@ impl Queue {
     // not running.
 
     #[doc = crate::man_link!(vkQueueWaitIdle)]
-    pub fn wait_idle(&mut self) -> Result<()> {
+    pub fn wait_idle(&mut self) {
         unsafe {
-            (self.device.fun().queue_wait_idle)(self.handle.borrow_mut())?
-        };
+            (self.device.fun().queue_wait_idle)(self.handle.borrow_mut())
+                .unwrap();
+        }
         self.resources.new_cleanup().cleanup();
-        Ok(())
     }
 }
 

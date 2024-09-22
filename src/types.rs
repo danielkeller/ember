@@ -7,39 +7,10 @@
 // except according to those terms.
 
 use crate::enums::*;
-use crate::error::Error;
+use crate::error::VkResult;
 use crate::ffi::*;
 use std::fmt::Debug;
 pub(crate) use std::sync::Arc;
-
-use std::num::NonZeroI32;
-
-#[repr(transparent)]
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
-/// A VkResult with a code other than VK_SUCCESS.
-pub struct VkError(pub NonZeroI32);
-
-impl std::fmt::Display for VkError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(self, f)
-    }
-}
-impl std::error::Error for VkError {}
-
-#[doc = crate::man_link!(VkResult)]
-pub type VkResult = std::result::Result<(), VkError>;
-
-// Check that VkResult corresponds to Vulkan's definition. This allows wrapper
-// functions to use '?'.
-const _: () = assert!(std::mem::size_of::<VkResult>() == 4);
-const _: () =
-    assert!(unsafe { std::mem::transmute::<i32, VkResult>(0).is_ok() });
-const _EXPECTED: VkResult =
-    Err(VkError(unsafe { NonZeroI32::new_unchecked(-1) }));
-const _: () = assert!(matches!(
-    unsafe { std::mem::transmute::<i32, VkResult>(-1) },
-    _EXPECTED
-));
 
 #[doc = crate::man_link!(VK_DEFINE_HANDLE)]
 #[repr(transparent)]
@@ -1499,22 +1470,21 @@ pub struct SubpassDescription<'a> {
     pub depth_stencil_attachments: &'a [AttachmentReference],
     pub preserve_attachments: &'a [AttachmentReference],
 }
-impl<'a> TryFrom<SubpassDescription<'a>> for VkSubpassDescription<'a> {
-    type Error = Error;
+impl<'a> From<SubpassDescription<'a>> for VkSubpassDescription<'a> {
     #[inline]
-    fn try_from(value: SubpassDescription<'a>) -> Result<Self, Self::Error> {
+    fn from(value: SubpassDescription<'a>) -> Self {
         if !value.resolve_attachments.is_empty()
             && value.resolve_attachments.len() != value.color_attachments.len()
         {
-            return Err(Error::InvalidArgument);
+            panic!("Different number of resolve and color attachments")
         }
         if !value.depth_stencil_attachments.is_empty()
             && value.depth_stencil_attachments.len()
                 != value.color_attachments.len()
         {
-            return Err(Error::InvalidArgument);
+            panic!("Different number of depth-stencil and color attachments")
         }
-        Ok(Self {
+        Self {
             flags: Default::default(),
             pipeline_bind_point: PipelineBindPoint::GRAPHICS,
             input_attachments: value.input_attachments.into(),
@@ -1524,7 +1494,7 @@ impl<'a> TryFrom<SubpassDescription<'a>> for VkSubpassDescription<'a> {
                 value.depth_stencil_attachments,
             ),
             preserve_attachments: value.preserve_attachments.into(),
-        })
+        }
     }
 }
 

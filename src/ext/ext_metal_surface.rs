@@ -10,7 +10,7 @@ use std::intrinsics::transmute;
 
 use crate::types::*;
 
-use crate::error::Result;
+use crate::error::VkResult;
 use crate::instance::Instance;
 
 use super::khr_surface::SurfaceKHR;
@@ -33,15 +33,16 @@ impl<'i> EXTMetalSurface<'i> {
     #[doc = crate::man_link!(vkCreateMetalSurfaceEXT)]
     pub unsafe fn create_metal_surface_ext(
         &self, info: &MetalSurfaceCreateInfoEXT,
-    ) -> Result<SurfaceKHR> {
+    ) -> SurfaceKHR {
         let mut handle = None;
         (self.fun.create_metal_surface_ext)(
             self.instance.handle(),
             info,
             None,
             &mut handle,
-        )?;
-        Ok(SurfaceKHR::new(handle.unwrap(), self.instance))
+        )
+        .unwrap();
+        SurfaceKHR::new(handle.unwrap(), self.instance)
     }
 }
 

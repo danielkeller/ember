@@ -6,9 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::error::{Error, Result};
 use crate::types::*;
-use crate::vk::Device;
+use crate::vk::{Device, OutOfDeviceMemory, VkResult};
 
 #[derive(Debug)]
 pub(crate) struct MemoryInner {
@@ -28,17 +27,22 @@ pub struct DeviceMemory {
 
 #[allow(clippy::len_without_is_empty)]
 impl DeviceMemory {
-    /// Returns [`Error::OutOfBounds`] if no memory type exists with the given
-    /// index.
     #[doc = crate::man_link!(vkAllocateMemory)]
-    pub fn new(
+    pub fn allocate(
         device: &Device, allocation_size: u64, memory_type_index: u32,
-    ) -> Result<Self> {
+    ) -> Self {
+        Self::try_allocate(device, allocation_size, memory_type_index).unwrap()
+    }
+
+    #[doc = crate::man_link!(vkAllocateMemory)]
+    pub fn try_allocate(
+        device: &Device, allocation_size: u64, memory_type_index: u32,
+    ) -> Result<Self, OutOfDeviceMemory> {
         let mem_types = device.physical_device().memory_properties();
         if memory_type_index >= mem_types.memory_types.len() {
-            return Err(Error::OutOfBounds);
+            panic!("Memory type {memory_type_index} out of bounds");
         }
-        device.increment_memory_alloc_count()?;
+        device.increment_memory_alloc_count();
         let mut handle = None;
         let result = unsafe {
             (device.fun().allocate_memory)(
@@ -53,9 +57,9 @@ impl DeviceMemory {
                 &mut handle,
             )
         };
-        if result.is_err() {
+        if !result.is_success() {
             device.decrement_memory_alloc_count();
-            result?;
+            result.unwrap_or_oom()?;
         }
         let inner = Arc::new(MemoryInner {
             handle: handle.unwrap(),
@@ -118,16 +122,23 @@ pub struct MappedMemory {
 }
 
 impl DeviceMemory {
-    /// Map the memory so it can be written to. Returns [`Error::OutOfBounds`] if
-    /// `offset` and `size` are out of bounds.
-    pub fn map(mut self, offset: u64, size: usize) -> Result<MappedMemory> {
+    pub fn map(self, offset: u64, size: usize) -> MappedMemory {
+        self.try_map(offset, size)
+            .expect("Not enough virtual address space to map memory")
+    }
+
+    /// Map the memory so it can be written to. Returns `self` in `Err` if the
+    /// mapping failed due to lack of virtual address space.
+    pub fn try_map(
+        mut self, offset: u64, size: usize,
+    ) -> Result<MappedMemory, Self> {
         let (end, overflow) = offset.overflowing_add(size as u64);
         if overflow || end > self.allocation_size || size > isize::MAX as usize
         {
-            return Err(Error::OutOfBounds);
+            panic!("Memory mapping offset {offset} and size {size} out of bounds of {}", self.allocation_size);
         }
         let mut ptr = std::ptr::null_mut();
-        unsafe {
+        let result = unsafe {
             (self.inner.device.fun().map_memory)(
                 self.inner.device.handle(),
                 self.handle.reborrow_mut(),
@@ -135,8 +146,12 @@ impl DeviceMemory {
                 size as u64,
                 Default::default(),
                 &mut ptr,
-            )?;
+            )
+        };
+        if result == VkResult::MEMORY_MAP_FAILED {
+            return Err(self);
         }
+        result.unwrap();
         Ok(MappedMemory { memory: self, size, ptr })
     }
 }

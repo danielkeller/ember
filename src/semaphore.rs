@@ -7,7 +7,6 @@
 // except according to those terms.
 
 use crate::device::Device;
-use crate::error::Result;
 use crate::types::*;
 
 // Preventing double-signals requires knowing when things will run, so we don't
@@ -28,7 +27,7 @@ pub struct Semaphore {
 
 impl Semaphore {
     #[doc = crate::man_link!(vkCreateSemaphore)]
-    pub fn new(device: &Device) -> Result<Self> {
+    pub fn new(device: &Device) -> Self {
         let mut handle = None;
         unsafe {
             (device.fun().create_semaphore)(
@@ -36,9 +35,10 @@ impl Semaphore {
                 &Default::default(),
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
-        Ok(Self { handle: handle.unwrap(), device: device.clone() })
+        Self { handle: handle.unwrap(), device: device.clone() }
     }
 }
 

@@ -8,7 +8,7 @@
 
 use std::cell::Cell;
 use std::future::{poll_fn, Future};
-use std::io::Write;
+use std::io::{self, Write};
 use std::mem::size_of;
 use std::ops::Deref;
 use std::pin::{pin, Pin};
@@ -18,7 +18,6 @@ use std::time::Instant;
 use std::u64;
 use std::{collections::HashMap, ops::DerefMut};
 
-use anyhow::Context as _;
 use maia::vk;
 use scoped_tls::scoped_thread_local;
 use ultraviolet::{Mat4, Vec3};
@@ -26,7 +25,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
-fn find_right_directory() -> anyhow::Result<()> {
+fn find_right_directory() -> io::Result<()> {
     let exe = std::env::current_exe()?;
     let exedir = exe.parent().unwrap();
     if let Some(dirname) = exedir.file_name() {
@@ -72,16 +71,16 @@ struct MVP {
     proj: Mat4,
 }
 
-fn required_instance_extensions() -> anyhow::Result<Vec<vk::Str<'static>>> {
+fn required_instance_extensions() -> Vec<vk::Str<'static>> {
     let mut result = vec![];
-    for ext in vk::instance_extension_properties()? {
+    for ext in vk::instance_extension_properties() {
         if ext.extension_name == vk::ext::GET_PHYSICAL_DEVICE_PROPERTIES2 {
             result.push(vk::ext::GET_PHYSICAL_DEVICE_PROPERTIES2)
         } else if ext.extension_name == vk::ext::PORTABILITY_ENUMERATION {
             result.push(vk::ext::PORTABILITY_ENUMERATION);
         }
     }
-    Ok(result)
+    result
 }
 
 fn pick_physical_device(phys: &[vk::PhysicalDevice]) -> vk::PhysicalDevice {
@@ -97,26 +96,26 @@ fn pick_physical_device(phys: &[vk::PhysicalDevice]) -> vk::PhysicalDevice {
 fn pick_queue_family(
     phy: &vk::PhysicalDevice, surf: &vk::ext::SurfaceKHR,
     window: &winit::window::Window,
-) -> anyhow::Result<u32> {
+) -> u32 {
     for (num, props) in phy.queue_family_properties().iter().enumerate() {
         if !(props.queue_flags & vk::QueueFlags::GRAPHICS).is_empty()
-            && surf.support(phy, num as u32)?
+            && surf.support(phy, num as u32)
             && maia::window::presentation_support(phy, num as u32, window)
         {
-            return Ok(num as u32);
+            return num as u32;
         }
     }
-    anyhow::bail!("No graphics queue")
+    panic!("No graphics queue")
 }
 
 fn required_device_extensions(
     phy: &vk::PhysicalDevice,
-) -> anyhow::Result<&'static [vk::Str<'static>]> {
-    let exts = phy.device_extension_properties()?;
+) -> &'static [vk::Str<'static>] {
+    let exts = phy.device_extension_properties();
     if exts.iter().any(|e| e.extension_name == vk::ext::PORTABILITY_SUBSET) {
-        Ok(&[vk::ext::PORTABILITY_SUBSET, vk::ext::SWAPCHAIN])
+        &[vk::ext::PORTABILITY_SUBSET, vk::ext::SWAPCHAIN]
     } else {
-        Ok(&[vk::ext::SWAPCHAIN])
+        &[vk::ext::SWAPCHAIN]
     }
 }
 
@@ -136,7 +135,7 @@ fn upload_data(
     device: &vk::Device, queue: &mut vk::Queue, cmd_pool: &vk::CommandPool,
     src: &[u8], dst: &vk::Buffer, dst_stage_mask: vk::PipelineStageFlags,
     dst_access_mask: vk::AccessFlags,
-) -> anyhow::Result<()> {
+) {
     let staging_buffer = vk::BufferWithoutMemory::new(
         device,
         &vk::BufferCreateInfo {
@@ -144,16 +143,16 @@ fn upload_data(
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
             ..Default::default()
         },
-    )?;
+    );
     let mem_size = staging_buffer.memory_requirements().size;
     let host_mem = memory_type(
         device.physical_device(),
         vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     );
-    let memory = vk::DeviceMemory::new(device, mem_size, host_mem)?;
-    let mut memory = memory.map(0, src.len())?;
-    let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
+    let memory = vk::DeviceMemory::allocate(device, mem_size, host_mem);
+    let mut memory = memory.map(0, src.len());
+    let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0);
     memory.as_slice_mut().copy_from_slice(src);
 
     let mut transfer = cmd_pool.begin();
@@ -161,26 +160,26 @@ fn upload_data(
         &staging_buffer,
         dst,
         &[vk::BufferCopy { size: src.len() as u64, ..Default::default() }],
-    )?;
+    );
     transfer.memory_barrier(
         vk::PipelineStageFlags::TRANSFER,
         dst_stage_mask,
         vk::AccessFlags::TRANSFER_WRITE,
         dst_access_mask,
     );
-    let transfer = transfer.end()?;
+    let transfer = transfer.end();
     queue.scope(|s| s.command(transfer));
-    Ok(())
 }
 
 fn upload_image(
     device: &vk::Device, queue: &mut vk::Queue, image: &vk::Image,
     cmd_pool: &vk::CommandPool,
-) -> anyhow::Result<()> {
-    let image_file = std::fs::File::open("assets/texture.jpg")?;
+) {
+    let image_file = std::fs::File::open("assets/texture.jpg")
+        .expect("Couldn't open texture");
     let mut image_data =
         jpeg_decoder::Decoder::new(std::io::BufReader::new(image_file));
-    let image_data = image_data.decode()?;
+    let image_data = image_data.decode().unwrap();
 
     let staging_buffer = vk::BufferWithoutMemory::new(
         &device,
@@ -189,16 +188,16 @@ fn upload_image(
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
             ..Default::default()
         },
-    )?;
+    );
     let mem_size = staging_buffer.memory_requirements().size;
     let host_mem = memory_type(
         device.physical_device(),
         vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
     );
-    let mut memory = vk::DeviceMemory::new(&device, mem_size, host_mem)?;
-    let mut memory = memory.map(0, mem_size as usize)?;
-    let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0)?;
+    let memory = vk::DeviceMemory::allocate(&device, mem_size, host_mem);
+    let mut memory = memory.map(0, mem_size as usize);
+    let staging_buffer = vk::Buffer::new(staging_buffer, &memory, 0);
     for (src, dst) in (image_data.chunks_exact(3))
         .zip(memory.as_slice_mut().chunks_exact_mut(4))
     {
@@ -225,7 +224,7 @@ fn upload_image(
             image_extent: vk::Extent3D { width: 512, height: 512, depth: 1 },
             ..Default::default()
         }],
-    )?;
+    );
     transfer.image_barrier(
         image,
         vk::PipelineStageFlags::TRANSFER,
@@ -235,9 +234,8 @@ fn upload_image(
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     );
-    let transfer = transfer.end()?;
+    let transfer = transfer.end();
     queue.scope(|s| s.command(transfer));
-    Ok(())
 }
 
 macro_rules! shader {
@@ -252,16 +250,17 @@ macro_rules! shader {
     };
 }
 
-async fn main_loop() -> anyhow::Result<()> {
-    find_right_directory().context("Changing dirs")?;
+async fn main_loop() {
+    find_right_directory().expect("Changing dirs failed");
     let window = EVENT_LOOP
-        .with(|evtloop| evtloop.create_window(Window::default_attributes()))?;
+        .with(|evtloop| evtloop.create_window(Window::default_attributes()))
+        .unwrap();
     window.set_title("Maia Demo");
 
     let mut instance_exts = vec![];
     instance_exts
-        .extend(maia::window::required_instance_extensions(&window)?.iter());
-    instance_exts.extend(required_instance_extensions()?.iter());
+        .extend(maia::window::required_instance_extensions(&window).iter());
+    instance_exts.extend(required_instance_extensions().iter());
     let inst = vk::Instance::new(&vk::InstanceCreateInfo {
         enabled_extension_names: instance_exts.as_slice().into(),
         flags: if instance_exts.contains(&vk::ext::PORTABILITY_ENUMERATION) {
@@ -270,22 +269,22 @@ async fn main_loop() -> anyhow::Result<()> {
             Default::default()
         },
         ..Default::default()
-    })?;
+    });
 
-    let surf = maia::window::create_surface(&inst, &window, &window)?;
+    let surf = maia::window::create_surface(&inst, &window, &window);
 
-    let phy = pick_physical_device(&inst.enumerate_physical_devices()?);
-    let queue_family = pick_queue_family(&phy, &surf, &window)?;
-    if !surf.surface_formats(&phy)?.iter().any(|f| {
+    let phy = pick_physical_device(&inst.enumerate_physical_devices());
+    let queue_family = pick_queue_family(&phy, &surf, &window);
+    if !surf.surface_formats(&phy).iter().any(|f| {
         f == &vk::SurfaceFormatKHR {
             format: vk::Format::B8G8R8A8_UNORM,
             color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR_KHR,
         }
     }) {
-        anyhow::bail!("Desired surface format not found");
+        panic!("Desired surface format not found");
     }
 
-    let device_extensions = required_device_extensions(&phy)?;
+    let device_extensions = required_device_extensions(&phy);
     let (device, mut queues) = vk::Device::new(
         &phy,
         &vk::DeviceCreateInfo {
@@ -302,10 +301,10 @@ async fn main_loop() -> anyhow::Result<()> {
             }),
             ..Default::default()
         },
-    )?;
+    );
     let mut queue = queues.remove(0).remove(0);
 
-    let mut acquire_sem = vk::Semaphore::new(&device)?;
+    let mut acquire_sem = vk::Semaphore::new(&device);
 
     let window_size = window.inner_size();
     let mut swapchain_size =
@@ -321,15 +320,15 @@ async fn main_loop() -> anyhow::Result<()> {
                 | vk::ImageUsageFlags::TRANSFER_DST,
             ..Default::default()
         },
-    )?;
+    );
     let mut swapchain_images = swapchain.images();
     let mut present_semaphores = [
-        vk::Semaphore::new(&device)?,
-        vk::Semaphore::new(&device)?,
-        vk::Semaphore::new(&device)?,
+        vk::Semaphore::new(&device),
+        vk::Semaphore::new(&device),
+        vk::Semaphore::new(&device),
     ];
 
-    let mut cmd_pool = vk::CommandPool::new(&device, queue_family)?;
+    let mut cmd_pool = vk::CommandPool::new(&device, queue_family);
 
     let vertex_size = std::mem::size_of_val(&VERTEX_DATA);
     let index_size = std::mem::size_of_val(&INDEX_DATA);
@@ -347,7 +346,7 @@ async fn main_loop() -> anyhow::Result<()> {
                 | vk::BufferUsageFlags::TRANSFER_DST,
             ..Default::default()
         },
-    )?;
+    );
     let index_buffer = vk::BufferWithoutMemory::new(
         &device,
         &vk::BufferCreateInfo {
@@ -356,18 +355,21 @@ async fn main_loop() -> anyhow::Result<()> {
                 | vk::BufferUsageFlags::TRANSFER_DST,
             ..Default::default()
         },
-    )?;
+    );
     let vert_req = vertex_buffer.memory_requirements();
     let ind_req = index_buffer.memory_requirements();
     assert_ne!(vert_req.memory_type_bits & (1 << device_mem), 0);
     assert_ne!(ind_req.memory_type_bits & (1 << device_mem), 0);
     let ind_start =
         (vert_req.size + ind_req.alignment - 1) & !(ind_req.alignment - 1);
-    let memory =
-        &vk::DeviceMemory::new(&device, ind_start + ind_req.size, device_mem)?;
+    let memory = &vk::DeviceMemory::allocate(
+        &device,
+        ind_start + ind_req.size,
+        device_mem,
+    );
 
-    let vertex_buffer = vk::Buffer::new(vertex_buffer, memory, 0)?;
-    let index_buffer = vk::Buffer::new(index_buffer, memory, ind_start)?;
+    let vertex_buffer = vk::Buffer::new(vertex_buffer, memory, 0);
+    let index_buffer = vk::Buffer::new(index_buffer, memory, ind_start);
 
     upload_data(
         &device,
@@ -377,7 +379,7 @@ async fn main_loop() -> anyhow::Result<()> {
         &vertex_buffer,
         vk::PipelineStageFlags::VERTEX_INPUT,
         vk::AccessFlags::VERTEX_ATTRIBUTE_READ,
-    )?;
+    );
 
     upload_data(
         &device,
@@ -387,7 +389,7 @@ async fn main_loop() -> anyhow::Result<()> {
         &index_buffer,
         vk::PipelineStageFlags::VERTEX_INPUT,
         vk::AccessFlags::INDEX_READ,
-    )?;
+    );
     let uniform_buffer = vk::BufferWithoutMemory::new(
         &device,
         &vk::BufferCreateInfo {
@@ -395,8 +397,8 @@ async fn main_loop() -> anyhow::Result<()> {
             usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
             ..Default::default()
         },
-    )?;
-    let uniform_memory = vk::DeviceMemory::new(
+    );
+    let uniform_memory = vk::DeviceMemory::allocate(
         &device,
         uniform_buffer.memory_requirements().size,
         memory_type(
@@ -405,9 +407,9 @@ async fn main_loop() -> anyhow::Result<()> {
                 | vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
         ),
-    )?;
-    let mut uniform_memory = uniform_memory.map(0, size_of::<MVP>())?;
-    let uniform_buffer = vk::Buffer::new(uniform_buffer, &uniform_memory, 0)?;
+    );
+    let mut uniform_memory = uniform_memory.map(0, size_of::<MVP>());
+    let uniform_buffer = vk::Buffer::new(uniform_buffer, &uniform_memory, 0);
 
     let image = vk::ImageWithoutMemory::new(
         &device,
@@ -418,20 +420,20 @@ async fn main_loop() -> anyhow::Result<()> {
                 | vk::ImageUsageFlags::SAMPLED,
             ..Default::default()
         },
-    )?;
+    );
     let image_reqs = image.memory_requirements();
     assert_ne!(image_reqs.memory_type_bits & (1 << device_mem), 0);
     let image_memory =
-        vk::DeviceMemory::new(&device, image_reqs.size, device_mem)?;
-    let image = vk::Image::new(image, &image_memory, 0)?;
-    upload_image(&device, &mut queue, &image, &mut cmd_pool)?;
+        vk::DeviceMemory::allocate(&device, image_reqs.size, device_mem);
+    let image = vk::Image::new(image, &image_memory, 0);
+    upload_image(&device, &mut queue, &image, &mut cmd_pool);
     let image_view = vk::ImageView::new(
         &image,
         &vk::ImageViewCreateInfo {
             format: vk::Format::R8G8B8A8_SRGB,
             ..Default::default()
         },
-    )?;
+    );
 
     let render_pass = vk::RenderPass::new(
         &device,
@@ -451,20 +453,20 @@ async fn main_loop() -> anyhow::Result<()> {
                 }],
                 ..Default::default()
             }
-            .try_into()?]),
+            .into()]),
             ..Default::default()
         },
-    )?;
+    );
 
     let mut swapchain_imageviews = vec![];
-    for img in swapchain_images.images() {
+    for img in swapchain_images {
         swapchain_imageviews.push(vk::ImageView::new(
             img,
             &vk::ImageViewCreateInfo {
                 format: vk::Format::B8G8R8A8_SRGB,
                 ..Default::default()
             },
-        )?);
+        ));
     }
     let mut framebuffers = vec![];
     for img_view in &swapchain_imageviews {
@@ -475,15 +477,15 @@ async fn main_loop() -> anyhow::Result<()> {
                 &[img_view],
                 swapchain_size,
             )
-        })(swapchain_size.into(), img_view)?);
+        })(swapchain_size.into(), img_view));
     }
 
     let vertex_shader =
-        vk::ShaderModule::new(&device, shader!("triangle.vert"))?;
+        vk::ShaderModule::new(&device, shader!("triangle.vert"));
     let fragment_shader =
-        vk::ShaderModule::new(&device, shader!("triangle.frag"))?;
+        vk::ShaderModule::new(&device, shader!("triangle.frag"));
 
-    let sampler = vk::Sampler::new(&device, &Default::default())?;
+    let sampler = vk::Sampler::new(&device, &Default::default());
     let descriptor_set_layout = vk::DescriptorSetLayout::new(
         &device,
         vec![
@@ -500,7 +502,7 @@ async fn main_loop() -> anyhow::Result<()> {
                 immutable_samplers: vec![sampler],
             },
         ],
-    )?;
+    );
     let mut descriptor_pool = vk::DescriptorPool::new(
         &device,
         1,
@@ -514,9 +516,9 @@ async fn main_loop() -> anyhow::Result<()> {
                 descriptor_count: 1,
             },
         ],
-    )?;
+    );
     let mut desc_set =
-        vk::DescriptorSet::new(&mut descriptor_pool, &descriptor_set_layout)?;
+        vk::DescriptorSet::new(&mut descriptor_pool, &descriptor_set_layout);
 
     let mut update = vk::DescriptorSetUpdateBuilder::new(&device);
     update
@@ -530,12 +532,12 @@ async fn main_loop() -> anyhow::Result<()> {
                 offset: 0,
                 range: None,
             }],
-        )?
+        )
         .combined_image_samplers(
             1,
             0,
             &[(&image_view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)],
-        )?
+        )
         .end();
 
     let pipeline_layout = Arc::new(vk::PipelineLayout::new(
@@ -543,63 +545,62 @@ async fn main_loop() -> anyhow::Result<()> {
         Default::default(),
         &[&descriptor_set_layout],
         vec![],
-    )?);
+    ));
 
-    let pipeline =
-        vk::Pipeline::new_graphics(vk::GraphicsPipelineCreateInfo {
-            stages: &[
-                vk::PipelineShaderStageCreateInfo::vertex(&vertex_shader),
-                vk::PipelineShaderStageCreateInfo::fragment(&fragment_shader),
-            ],
-            vertex_input_state: &vk::PipelineVertexInputStateCreateInfo {
-                vertex_binding_descriptions: vk::slice(&[
-                    vk::VertexInputBindingDescription {
-                        binding: 0,
-                        stride: size_of::<Vertex>() as u32,
-                        input_rate: vk::VertexInputRate::VERTEX,
-                    },
-                ]),
-                vertex_attribute_descriptions: vk::slice(&[
-                    vk::VertexInputAttributeDescription {
-                        location: 0,
-                        binding: 0,
-                        format: vk::Format::R32G32B32A32_SFLOAT,
-                        offset: 0,
-                    },
-                    vk::VertexInputAttributeDescription {
-                        location: 1,
-                        binding: 0,
-                        format: vk::Format::R32G32_SFLOAT,
-                        offset: 16,
-                    },
-                ]),
-                ..Default::default()
-            },
-            input_assembly_state: &vk::PipelineInputAssemblyStateCreateInfo {
-                topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-                ..Default::default()
-            },
-            tessellation_state: None,
-            viewport_state: &vk::PipelineViewportStateCreateInfo {
-                viewports: vk::slice(&[Default::default()]),
-                scissors: vk::slice(&[vk::Rect2D {
-                    offset: Default::default(),
-                    extent: vk::Extent2D { width: 3840, height: 2160 },
-                }]),
-                ..Default::default()
-            },
-            rasterization_state: &Default::default(),
-            multisample_state: &Default::default(),
-            depth_stencil_state: None,
-            color_blend_state: &Default::default(),
-            dynamic_state: Some(&vk::PipelineDynamicStateCreateInfo {
-                dynamic_states: vk::slice(&[vk::DynamicState::VIEWPORT]),
-                ..Default::default()
-            }),
-            layout: pipeline_layout.clone(),
-            render_pass: render_pass.clone(),
-            subpass: 0,
-        })?;
+    let pipeline = vk::Pipeline::new_graphics(vk::GraphicsPipelineCreateInfo {
+        stages: &[
+            vk::PipelineShaderStageCreateInfo::vertex(&vertex_shader),
+            vk::PipelineShaderStageCreateInfo::fragment(&fragment_shader),
+        ],
+        vertex_input_state: &vk::PipelineVertexInputStateCreateInfo {
+            vertex_binding_descriptions: vk::slice(&[
+                vk::VertexInputBindingDescription {
+                    binding: 0,
+                    stride: size_of::<Vertex>() as u32,
+                    input_rate: vk::VertexInputRate::VERTEX,
+                },
+            ]),
+            vertex_attribute_descriptions: vk::slice(&[
+                vk::VertexInputAttributeDescription {
+                    location: 0,
+                    binding: 0,
+                    format: vk::Format::R32G32B32A32_SFLOAT,
+                    offset: 0,
+                },
+                vk::VertexInputAttributeDescription {
+                    location: 1,
+                    binding: 0,
+                    format: vk::Format::R32G32_SFLOAT,
+                    offset: 16,
+                },
+            ]),
+            ..Default::default()
+        },
+        input_assembly_state: &vk::PipelineInputAssemblyStateCreateInfo {
+            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+            ..Default::default()
+        },
+        tessellation_state: None,
+        viewport_state: &vk::PipelineViewportStateCreateInfo {
+            viewports: vk::slice(&[Default::default()]),
+            scissors: vk::slice(&[vk::Rect2D {
+                offset: Default::default(),
+                extent: vk::Extent2D { width: 3840, height: 2160 },
+            }]),
+            ..Default::default()
+        },
+        rasterization_state: &Default::default(),
+        multisample_state: &Default::default(),
+        depth_stencil_state: None,
+        color_blend_state: &Default::default(),
+        dynamic_state: Some(&vk::PipelineDynamicStateCreateInfo {
+            dynamic_states: vk::slice(&[vk::DynamicState::VIEWPORT]),
+            ..Default::default()
+        }),
+        layout: pipeline_layout.clone(),
+        render_pass: render_pass.clone(),
+        subpass: 0,
+    });
 
     let begin = Instant::now();
 
@@ -609,7 +610,7 @@ async fn main_loop() -> anyhow::Result<()> {
         let evt =
             winit_event(|evt| matches!(evt, RedrawRequested | CloseRequested));
         if let CloseRequested = evt.await {
-            return Ok(());
+            return;
         }
 
         let draw_size = window.inner_size();
@@ -620,24 +621,24 @@ async fn main_loop() -> anyhow::Result<()> {
             swapchain_size = draw_size;
             drop(framebuffers);
             drop(swapchain_imageviews);
-            swapchain.recreate(&vk::SwapchainCreateInfoKHR {
+            swapchain = swapchain.recreate(&vk::SwapchainCreateInfoKHR {
                 min_image_count: 3,
                 image_format: vk::Format::B8G8R8A8_SRGB,
                 image_extent: swapchain_size,
                 image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT
                     | vk::ImageUsageFlags::TRANSFER_DST,
                 ..Default::default()
-            })?;
+            });
             swapchain_images = swapchain.images();
             swapchain_imageviews = vec![];
-            for img in swapchain_images.images() {
+            for img in swapchain_images {
                 swapchain_imageviews.push(vk::ImageView::new(
                     img,
                     &vk::ImageViewCreateInfo {
                         format: vk::Format::B8G8R8A8_SRGB,
                         ..Default::default()
                     },
-                )?);
+                ));
             }
             framebuffers = vec![];
             for img_view in &swapchain_imageviews {
@@ -650,11 +651,11 @@ async fn main_loop() -> anyhow::Result<()> {
                     )
                 })(
                     swapchain_size.into(), img_view
-                )?);
+                ));
             }
         }
 
-        queue.scope(|s| -> anyhow::Result<()> {
+        queue.scope(|s| {
             // let (img, _) = s.acquire_next_image(
             //     &mut swapchain_images,
             //     u64::MAX,
@@ -680,9 +681,9 @@ async fn main_loop() -> anyhow::Result<()> {
                 0.1,
             );
 
-            cmd_pool.reset()?;
-            // let subpass = cmd_pool.allocate_secondary()?;
-            // let mut subpass = cmd_pool.begin_secondary(subpass, &render_pass, 0)?;
+            cmd_pool.reset();
+            // let subpass = cmd_pool.allocate_secondary();
+            // let mut subpass = cmd_pool.begin_secondary(subpass, &render_pass, 0);
             // subpass.set_viewport(&vk::Viewport {
             //     x: 0.0,
             //     y: 0.0,
@@ -692,17 +693,17 @@ async fn main_loop() -> anyhow::Result<()> {
             //     max_depth: 1.0,
             // });
             // subpass.bind_pipeline(&pipeline);
-            // subpass.bind_vertex_buffers(0, &[(&vertex_buffer, 0)])?;
-            // subpass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16)?;
+            // subpass.bind_vertex_buffers(0, &[(&vertex_buffer, 0)]);
+            // subpass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16);
             // subpass.bind_descriptor_sets(
             //     vk::PipelineBindPoint::GRAPHICS,
             //     &pipeline_layout,
             //     0,
             //     &[&desc_set],
             //     &[],
-            // )?;
-            // subpass.draw_indexed(6, 1, 0, 0, 0)?;
-            // let mut subpass = subpass.end()?;
+            // );
+            // subpass.draw_indexed(6, 1, 0, 0, 0);
+            // let mut subpass = subpass.end();
 
             let mut pass = cmd_pool.begin().begin_render_pass(
                 &render_pass,
@@ -717,7 +718,7 @@ async fn main_loop() -> anyhow::Result<()> {
                 &[vk::ClearValue {
                     color: vk::ClearColorValue { f32: [0.1, 0.2, 0.3, 1.0] },
                 }],
-            )?;
+            );
             pass.set_viewport(&vk::Viewport {
                 x: 0.0,
                 y: 0.0,
@@ -727,24 +728,23 @@ async fn main_loop() -> anyhow::Result<()> {
                 max_depth: 1.0,
             });
             pass.bind_pipeline(&pipeline);
-            pass.bind_vertex_buffers(0, [&vertex_buffer], [0])?;
-            pass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16)?;
+            pass.bind_vertex_buffers(0, [&vertex_buffer], [0]);
+            pass.bind_index_buffer(&index_buffer, 0, vk::IndexType::UINT16);
             pass.bind_descriptor_sets(
                 vk::PipelineBindPoint::GRAPHICS,
                 &pipeline_layout,
                 0,
                 &[&desc_set],
                 &[],
-            )?;
-            pass.draw_indexed(6, 1, 0, 0, 0)?;
-            let mut buf = pass.end()?.end()?;
+            );
+            pass.draw_indexed(6, 1, 0, 0, 0);
+            let mut buf = pass.end().end();
 
             // s.wait(acquire_sem, vk::PipelineStageFlags::TOP_OF_PIPE);
             s.command(buf);
             let present_sem = s.signal(present_sem);
             // s.present(&mut swapchain_images, img, present_sem);
-            Ok(())
-        })?;
+        });
     }
 }
 
@@ -809,14 +809,9 @@ where
     }
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
     use winit::event_loop::EventLoop;
-    let fut = pin!(async {
-        if let Err(err) = main_loop().await {
-            eprintln!("{err:?}");
-        }
-    });
-    let event_loop = EventLoop::new()?;
-    event_loop.run_app(&mut App { fut })?;
-    Ok(())
+    let fut = pin!(main_loop());
+    let event_loop = EventLoop::new().unwrap();
+    event_loop.run_app(&mut App { fut }).unwrap();
 }

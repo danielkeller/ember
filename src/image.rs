@@ -7,7 +7,6 @@
 // except according to those terms.
 
 use crate::enums::*;
-use crate::error::{Error, Result};
 use crate::ext::khr_swapchain::SwapchainInner;
 use crate::memory::{DeviceMemory, MemoryInner};
 use crate::render_pass::{RenderPass, RenderPassCompat};
@@ -95,7 +94,7 @@ impl std::ops::Deref for ImageView {
 
 impl ImageWithoutMemory {
     #[doc = crate::man_link!(vkCreateImage)]
-    pub fn new(device: &Device, info: &ImageCreateInfo<'_>) -> Result<Self> {
+    pub fn new(device: &Device, info: &ImageCreateInfo<'_>) -> Self {
         let max_dim =
             info.extent.width.max(info.extent.height).max(info.extent.depth);
         if (info.image_type == ImageType::_1D
@@ -108,9 +107,11 @@ impl ImageWithoutMemory {
                 && max_dim > device.limits().max_image_dimension_cube)
             || (info.image_type == ImageType::_3D
                 && max_dim > device.limits().max_image_dimension_3d)
-            || (info.array_layers > device.limits().max_image_array_layers)
         {
-            return Err(Error::LimitExceeded);
+            panic!("Image dimension {max_dim} too large");
+        }
+        if info.array_layers > device.limits().max_image_array_layers {
+            panic!("Too many array layers ({})", info.array_layers);
         }
         let mut handle = None;
         unsafe {
@@ -119,9 +120,10 @@ impl ImageWithoutMemory {
                 info,
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
-        Ok(Self {
+        Self {
             handle: handle.unwrap(),
             extent: info.extent,
             format: info.format,
@@ -130,7 +132,7 @@ impl ImageWithoutMemory {
             usage: info.usage,
             owned: true,
             device: device.clone(),
-        })
+        }
     }
     /// Borrows the inner Vulkan handle.
     pub fn handle(&self) -> Ref<VkImage> {
@@ -238,10 +240,10 @@ impl Image {
     #[doc = crate::man_link!(vkBindImageMemory)]
     pub fn new(
         mut image: ImageWithoutMemory, memory: &DeviceMemory, offset: u64,
-    ) -> Result<Self> {
+    ) -> Self {
         assert_eq!(memory.device(), &image.device);
         if !memory.check(offset, image.memory_requirements()) {
-            return Err(Error::InvalidArgument);
+            panic!("Memory does not meet requirements of image");
         }
 
         unsafe {
@@ -250,11 +252,12 @@ impl Image {
                 image.handle.borrow_mut(),
                 memory.handle(),
                 offset,
-            )?;
+            )
+            .unwrap();
         }
         let _memory = ImageBacking::Memory(memory.inner());
         let inner = Arc::new(ImageInner { inner: image, _memory });
-        Ok(Self { inner })
+        Self { inner }
     }
 
     pub(crate) fn new_from_swapchain(
@@ -295,7 +298,7 @@ pub struct ImageViewCreateInfo {
 
 impl ImageView {
     /// Create an image view of the image.
-    pub fn new(image: &Image, info: &ImageViewCreateInfo) -> Result<Self> {
+    pub fn new(image: &Image, info: &ImageViewCreateInfo) -> Self {
         let vk_info = VkImageViewCreateInfo {
             stype: Default::default(),
             next: Default::default(),
@@ -313,13 +316,14 @@ impl ImageView {
                 &vk_info,
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
         let inner = Arc::new(ImageViewInner {
             handle: handle.unwrap(),
             image: image.clone(),
         });
-        Ok(Self { inner })
+        Self { inner }
     }
 }
 
@@ -351,11 +355,11 @@ impl ImageView {
 }
 
 impl Framebuffer {
-    #[doc = crate::man_link!(vkCreateFrameuffer)]
+    #[doc = crate::man_link!(vkCreateFramebuffer)]
     pub fn new(
         render_pass: &RenderPass, flags: FramebufferCreateFlags,
         attachments: &[&ImageView], size: Extent3D,
-    ) -> Result<Self> {
+    ) -> Self {
         for iv in attachments {
             assert_eq!(iv.device(), render_pass.device());
         }
@@ -364,7 +368,7 @@ impl Framebuffer {
             || size.height > lim.max_framebuffer_height
             || size.depth > lim.max_framebuffer_layers
         {
-            return Err(Error::LimitExceeded);
+            panic!("Framebuffer size {size:?} exceeds limits");
         }
         let vk_attachments: Vec<_> =
             attachments.iter().map(|iv| iv.handle()).collect();
@@ -385,15 +389,16 @@ impl Framebuffer {
                 &vk_create_info,
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
         let attachments = attachments.iter().map(|&iv| iv.clone()).collect();
-        Ok(Self {
+        Self {
             handle: handle.unwrap(),
             render_pass_compat: render_pass.compat.clone(),
             _attachments: attachments,
             device: render_pass.device().clone(),
-        })
+        }
     }
 
     /// Borrows the inner Vulkan handle.

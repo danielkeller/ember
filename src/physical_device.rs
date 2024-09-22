@@ -8,7 +8,6 @@
 
 use std::mem::MaybeUninit;
 
-use crate::error::Result;
 use crate::ffi::ArrayMut;
 use crate::instance::Instance;
 use crate::types::*;
@@ -25,9 +24,7 @@ pub struct PhysicalDevice {
 impl Instance {
     /// Returns the instance's physical devices.
     #[doc = crate::man_link!(vkEnumeratePhysicalDevices)]
-    pub fn enumerate_physical_devices(
-        self: &Self,
-    ) -> Result<Vec<PhysicalDevice>> {
+    pub fn enumerate_physical_devices(self: &Self) -> Vec<PhysicalDevice> {
         let mut len = 0;
         let mut result = Vec::new();
         unsafe {
@@ -35,19 +32,21 @@ impl Instance {
                 self.handle(),
                 &mut len,
                 None,
-            )?;
+            )
+            .unwrap();
             result.reserve(len as usize);
             (self.fun().enumerate_physical_devices)(
                 self.handle(),
                 &mut len,
                 ArrayMut::from_slice(result.spare_capacity_mut()),
-            )?;
+            )
+            .unwrap();
             result.set_len(len as usize);
         }
-        Ok(result
+        result
             .into_iter()
             .map(|handle| PhysicalDevice { handle, instance: self.clone() })
-            .collect())
+            .collect()
     }
 }
 
@@ -109,9 +108,7 @@ impl PhysicalDevice {
     }
 
     #[doc = crate::man_link!(vkEnumerateDeviceExtensionProperties)]
-    pub fn device_extension_properties(
-        &self,
-    ) -> Result<Vec<ExtensionProperties>> {
+    pub fn device_extension_properties(&self) -> Vec<ExtensionProperties> {
         let mut len = 0;
         let mut result = Vec::new();
         unsafe {
@@ -120,16 +117,18 @@ impl PhysicalDevice {
                 None,
                 &mut len,
                 None,
-            )?;
+            )
+            .unwrap();
             result.reserve(len as usize);
             (self.instance.fun().enumerate_device_extension_properties)(
                 self.handle(),
                 None,
                 &mut len,
                 ArrayMut::from_slice(result.spare_capacity_mut()),
-            )?;
+            )
+            .unwrap();
             result.set_len(len as usize);
         }
-        Ok(result)
+        result
     }
 }

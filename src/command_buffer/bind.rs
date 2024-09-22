@@ -9,7 +9,6 @@
 use crate::buffer::Buffer;
 use crate::descriptor_set::DescriptorSet;
 use crate::enums::*;
-use crate::error::{Error, Result};
 use crate::ffi::Array;
 use crate::pipeline::{Pipeline, PipelineLayout};
 
@@ -66,7 +65,7 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     pub fn bind_vertex_buffers<const N: usize>(
         &mut self, first_binding: u32, buffers: [&'pool Buffer; N],
         offsets: [u64; N],
-    ) -> Result<()> {
+    ) {
         self.rec.bind_vertex_buffers(first_binding, buffers, offsets)
     }
     /// Reference count of `buffer` is incremented. Returns
@@ -75,7 +74,7 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdBindIndexBuffer)]
     pub fn bind_index_buffer(
         &mut self, buffer: &'pool Buffer, offset: u64, index_type: IndexType,
-    ) -> Result<()> {
+    ) {
         self.rec.bind_index_buffer(buffer, offset, index_type)
     }
 }
@@ -87,7 +86,7 @@ impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     pub fn bind_vertex_buffers<const N: usize>(
         &mut self, first_binding: u32, buffers: [&'pool Buffer; N],
         offsets: [u64; N],
-    ) -> Result<()> {
+    ) {
         self.rec.bind_vertex_buffers(first_binding, buffers, offsets)
     }
     /// Reference count of `buffer` is incremented. Returns
@@ -96,7 +95,7 @@ impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdBindIndexBuffer)]
     pub fn bind_index_buffer(
         &mut self, buffer: &'pool Buffer, offset: u64, index_type: IndexType,
-    ) -> Result<()> {
+    ) {
         self.rec.bind_index_buffer(buffer, offset, index_type)
     }
 }
@@ -108,10 +107,10 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     pub fn bind_vertex_buffers<const N: usize>(
         &mut self, first_binding: u32, buffers: [&'pool Buffer; N],
         offsets: [u64; N],
-    ) -> Result<()> {
+    ) {
         for buffer in buffers {
             if !buffer.usage().contains(BufferUsageFlags::VERTEX_BUFFER) {
-                return Err(Error::InvalidArgument);
+                panic!("Buffer missing usage flag for vertex buffer");
             }
         }
         let vkbuffers = &buffers.map(|b| b.handle());
@@ -125,7 +124,6 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 (&offsets).into(),
             )
         }
-        Ok(())
     }
     /// Reference count of `buffer` is incremented. Returns
     /// [`Error::InvalidArgument`] if `buffer` does not have the `INDEX_BUFFER`
@@ -133,9 +131,9 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdBindIndexBuffer)]
     pub fn bind_index_buffer(
         &mut self, buffer: &'pool Buffer, offset: u64, index_type: IndexType,
-    ) -> Result<()> {
+    ) {
         if !buffer.usage().contains(BufferUsageFlags::INDEX_BUFFER) {
-            return Err(Error::InvalidArgument);
+            panic!("Buffer missing usage flag for index buffer");
         }
         unsafe {
             (self.device.fun().cmd_bind_index_buffer)(
@@ -145,7 +143,6 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 index_type,
             )
         }
-        Ok(())
     }
 }
 
@@ -165,7 +162,7 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
         &mut self, pipeline_bind_point: PipelineBindPoint,
         layout: &'pool PipelineLayout, first_set: u32,
         sets: &[&'pool DescriptorSet], dynamic_offsets: &[u32],
-    ) -> Result<()> {
+    ) {
         self.rec.bind_descriptor_sets(
             pipeline_bind_point,
             layout,
@@ -191,7 +188,7 @@ impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
         &mut self, pipeline_bind_point: PipelineBindPoint,
         layout: &'pool PipelineLayout, first_set: u32,
         sets: &[&'pool DescriptorSet], dynamic_offsets: &[u32],
-    ) -> Result<()> {
+    ) {
         self.rec.bind_descriptor_sets(
             pipeline_bind_point,
             layout,
@@ -244,21 +241,23 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         &mut self, pipeline_bind_point: PipelineBindPoint,
         layout: &'pool PipelineLayout, first_set: u32,
         sets: &[&'pool DescriptorSet], dynamic_offsets: &[u32],
-    ) -> Result<()> {
+    ) {
         // Max binding is already checked by the layout
         let layouts = layout.layouts().iter();
         if sets
             .iter()
             .map(|s| s.layout())
             .ne(layouts.skip(first_set as usize).take(sets.len()))
-            || sets
-                .iter()
-                .map(|s| s.layout().num_dynamic_offsets())
-                .sum::<u32>()
-                != dynamic_offsets.len() as u32
-            || sets.iter().any(|s| !s.is_initialized())
         {
-            return Err(Error::InvalidArgument);
+            panic!("Descriptor set layouts don't match pipeline layout")
+        }
+        if sets.iter().map(|s| s.layout().num_dynamic_offsets()).sum::<u32>()
+            != dynamic_offsets.len() as u32
+        {
+            panic!("Wrong number of dynamic offsets")
+        }
+        if sets.iter().any(|s| !s.is_initialized()) {
+            panic!("Descriptor set not fully initialized")
         }
         if pipeline_bind_point == PipelineBindPoint::GRAPHICS {
             self.graphics.bind_descriptor_sets(
@@ -290,8 +289,6 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 Array::from_slice(dynamic_offsets),
             )
         }
-
-        Ok(())
     }
 }
 
@@ -303,7 +300,7 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     pub fn push_constants(
         &mut self, layout: &PipelineLayout, stage_flags: ShaderStageFlags,
         offset: u32, data: &[u8],
-    ) -> Result<()> {
+    ) {
         self.rec.push_constants(layout, stage_flags, offset, data)
     }
 }
@@ -315,7 +312,7 @@ impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     pub fn push_constants(
         &mut self, layout: &PipelineLayout, stage_flags: ShaderStageFlags,
         offset: u32, data: &[u8],
-    ) -> Result<()> {
+    ) {
         self.rec.push_constants(layout, stage_flags, offset, data)
     }
 }
@@ -327,13 +324,13 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     pub fn push_constants(
         &mut self, layout: &PipelineLayout, stage_flags: ShaderStageFlags,
         offset: u32, data: &[u8],
-    ) -> Result<()> {
+    ) {
         if !layout.bounds_check_push_constants(
             stage_flags,
             offset,
             data.len() as u32,
         ) {
-            return Err(Error::OutOfBounds);
+            panic!("Push constants out of bounds")
         }
         unsafe {
             (self.device.fun().cmd_push_constants)(
@@ -342,10 +339,9 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 stage_flags,
                 offset,
                 data.len() as u32,
-                Array::from_slice(data).ok_or(Error::InvalidArgument)?,
+                Array::from_slice(data).expect("push constant data empty"),
             );
         }
-        Ok(())
     }
 }
 

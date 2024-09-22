@@ -12,7 +12,6 @@ use std::fmt::Debug;
 use crate::descriptor_set::DescriptorSetLayout;
 use crate::device::Device;
 use crate::enums::*;
-use crate::error::{Error, Result};
 use crate::ffi::ArrayMut;
 use crate::image::Framebuffer;
 use crate::pipeline::Pipeline;
@@ -109,9 +108,9 @@ impl CommandPool {
     /// Create a command pool. The pool is not transient, not protected, and its
     /// buffers cannot be individually reset.
     #[doc = crate::man_link!(vkCreateCommandPool)]
-    pub fn new(device: &Device, queue_family_index: u32) -> Result<Self> {
+    pub fn new(device: &Device, queue_family_index: u32) -> Self {
         if !device.has_queue(queue_family_index, 1) {
-            return Err(Error::OutOfBounds);
+            panic!("Queue family index {queue_family_index} out of bounds")
         }
         let mut handle = None;
         unsafe {
@@ -123,11 +122,12 @@ impl CommandPool {
                 },
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
         let handle = handle.unwrap();
 
-        Ok(CommandPool {
+        CommandPool {
             inner: CommandPoolInner {
                 handle,
                 buffers: Default::default(),
@@ -136,7 +136,7 @@ impl CommandPool {
             .into(),
             scratch: Default::default(),
             device: device.clone(),
-        })
+        }
     }
 
     fn reserve(&self, additional: u32) {
@@ -169,19 +169,19 @@ impl CommandPool {
 
     /// Resets the pool and adds all command buffers to the free list.
     #[doc = crate::man_link!(vkResetCommandPool)]
-    pub fn reset(&mut self) -> Result<()> {
+    pub fn reset(&mut self) {
         let inner = self.inner.get_mut();
         unsafe {
             (self.device.fun().reset_command_pool)(
                 self.device.handle(),
                 inner.handle.borrow_mut(),
                 Default::default(),
-            )?;
+            )
+            .unwrap();
         }
         inner.free_buffers.clear();
         inner.free_buffers.extend(0..inner.buffers.len());
         self.scratch.reset();
-        Ok(())
     }
 
     /// Begin a command buffer, allocating a new one if one is not available on the free list. Command buffers have ONE_TIME_SUBMIT set.
@@ -320,11 +320,12 @@ impl<'a> Bindings<'a> {
 
 impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkEndCommandBuffer)]
-    pub fn end(mut self) -> Result<CommandBuffer<'pool>> {
+    pub fn end(mut self) -> CommandBuffer<'pool> {
         unsafe {
-            (self.device.fun().end_command_buffer)(self.buffer.handle_mut())?;
+            (self.device.fun().end_command_buffer)(self.buffer.handle_mut())
+                .unwrap();
         }
-        Ok(self.buffer)
+        self.buffer
     }
 }
 /*
@@ -343,9 +344,9 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         mut self, render_pass: &'pool RenderPass,
         framebuffer: &'pool Framebuffer, render_area: &Rect2D,
         clear_values: &[ClearValue],
-    ) -> Result<RenderPassRecording<'rec, 'pool>> {
+    ) -> RenderPassRecording<'rec, 'pool> {
         if !framebuffer.is_compatible_with(render_pass) {
-            return Err(Error::InvalidArgument);
+            panic!("Framebuffer is not compatible with render pass");
         }
         let info = RenderPassBeginInfo {
             stype: Default::default(),
@@ -362,7 +363,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 SubpassContents::INLINE,
             );
         }
-        Ok(RenderPassRecording { rec: self, pass: render_pass, subpass: 0 })
+        RenderPassRecording { rec: self, pass: render_pass, subpass: 0 }
     }
     /*
     /// Begins a render pass recorded in secondary command buffers. Returns
@@ -420,12 +421,12 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
 }
 
 impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
-    /// Advance to the next subpass, recorded inline. Returns
-    /// [`Error::OutOfBounds`] if this is the last subpass.
+    /// Advance to the next subpass, recorded inline. Panics if this is the last
+    /// subpass.
     #[doc = crate::man_link!(vkCmdNextSubpass)]
-    pub fn next_subpass(&mut self) -> Result<()> {
+    pub fn next_subpass(&mut self) {
         if self.subpass >= self.pass.num_subpasses() - 1 {
-            return Err(Error::OutOfBounds);
+            panic!("No more subpasses")
         }
         self.subpass += 1;
         unsafe {
@@ -434,7 +435,6 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
                 SubpassContents::INLINE,
             )
         }
-        Ok(())
     }
     /*
     /// Advance to the next subpass, recorded in secondary command buffers.
@@ -458,19 +458,18 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
             subpass: self.subpass + 1,
         })
     }*/
-    /// Ends the render pass. Returns [`Error::InvalidState`] if this is not the
-    /// last subpass.
+    /// Ends the render pass. Panics if this is not the last subpass.
     #[doc = crate::man_link!(vkCmdEndRenderPass)]
-    pub fn end(mut self) -> Result<CommandRecording<'rec, 'pool>> {
+    pub fn end(mut self) -> CommandRecording<'rec, 'pool> {
         if self.subpass != self.pass.num_subpasses() - 1 {
-            return Err(Error::InvalidState);
+            panic!("Not all subpasses recorded");
         }
         unsafe {
             (self.rec.device.fun().cmd_end_render_pass)(
                 self.rec.buffer.handle_mut(),
             );
         }
-        Ok(self.rec)
+        self.rec
     }
 }
 /*

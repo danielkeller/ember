@@ -11,7 +11,6 @@ use crate::buffer::Buffer;
 use crate::device::Device;
 use crate::enums::DescriptorType;
 use crate::enums::ImageLayout;
-use crate::error::{Error, Result};
 use crate::exclusive::Exclusive;
 use crate::ffi::Array;
 use crate::image::ImageView;
@@ -233,20 +232,19 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
         mut self, dst_binding: u32, dst_array_element: u32,
         buffers: &'_ [DescriptorBufferInfo<'s>], max_range: u32,
         descriptor_type: DescriptorType,
-    ) -> Result<Self> {
+    ) -> Self {
         let iter = BindingIter::new(
             self.set.layout.bindings(),
             dst_binding as usize,
             dst_array_element,
             descriptor_type,
         );
-        for (b, be) in buffers.iter().zip(iter) {
-            let (binding, element) = be?;
+        for (b, (binding, element)) in buffers.iter().zip(iter) {
             if b.range.map_or(false, |r| r > max_range as u64) {
-                return Err(Error::LimitExceeded);
+                panic!("Buffer binding range exceeds limit for {descriptor_type:?}")
             }
             if !descriptor_type.supports_buffer_usage(b.buffer.usage()) {
-                return Err(Error::InvalidArgument);
+                panic!("Buffer missing usage flag for {descriptor_type:?}");
             }
             assert_eq!(b.buffer.device(), self.updates.device);
             self.updates.resources.push(Resource {
@@ -277,14 +275,14 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
             buffer_info: Array::from_slice(buffer_infos),
             texel_buffer_view: None,
         });
-        Ok(self)
+        self
     }
     /// Update uniform buffer bindings.
     #[doc = buffer_checks!()]
     pub fn uniform_buffers(
         self, dst_binding: u32, dst_array_element: u32,
         buffers: &'_ [DescriptorBufferInfo<'s>],
-    ) -> Result<Self> {
+    ) -> Self {
         let max_range = self.updates.device.limits().max_uniform_buffer_range;
         self.buffers_impl(
             dst_binding,
@@ -299,7 +297,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     pub fn storage_buffers(
         self, dst_binding: u32, dst_array_element: u32,
         buffers: &'_ [DescriptorBufferInfo<'s>],
-    ) -> Result<Self> {
+    ) -> Self {
         let max_range = self.updates.device.limits().max_storage_buffer_range;
         self.buffers_impl(
             dst_binding,
@@ -314,7 +312,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     pub fn uniform_buffers_dynamic(
         self, dst_binding: u32, dst_array_element: u32,
         buffers: &'_ [DescriptorBufferInfo<'s>],
-    ) -> Result<Self> {
+    ) -> Self {
         let max_range = self.updates.device.limits().max_uniform_buffer_range;
         self.buffers_impl(
             dst_binding,
@@ -329,7 +327,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     pub fn storage_buffers_dynamic(
         self, dst_binding: u32, dst_array_element: u32,
         buffers: &'_ [DescriptorBufferInfo<'s>],
-    ) -> Result<Self> {
+    ) -> Self {
         let max_range = self.updates.device.limits().max_storage_buffer_range;
         self.buffers_impl(
             dst_binding,
@@ -347,20 +345,19 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     pub fn samplers(
         mut self, dst_binding: u32, dst_array_element: u32,
         samplers: &[&'s Sampler],
-    ) -> Result<Self> {
+    ) -> Self {
         let iter = BindingIter::new(
             self.set.layout.bindings(),
             dst_binding as usize,
             dst_array_element,
             DescriptorType::SAMPLER,
         );
-        for (&s, be) in samplers.iter().zip(iter) {
-            let (binding, element) = be?;
+        for (&s, (binding, element)) in samplers.iter().zip(iter) {
             if !self.set.layout.bindings()[binding]
                 .immutable_samplers
                 .is_empty()
             {
-                return Err(Error::InvalidArgument);
+                panic!("Binding already has immutable sampler")
             }
             assert_eq!(s.device(), self.updates.device);
             self.updates.resources.push(Resource {
@@ -389,24 +386,23 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
             buffer_info: None,
             texel_buffer_view: None,
         });
-        Ok(self)
+        self
     }
 
     pub(crate) fn images_impl(
         mut self, dst_binding: u32, dst_array_element: u32,
         images: &[(&'s ImageView, ImageLayout)],
         descriptor_type: DescriptorType,
-    ) -> Result<Self> {
+    ) -> Self {
         let iter = BindingIter::new(
             &self.set.layout.bindings(),
             dst_binding as usize,
             dst_array_element,
             descriptor_type,
         );
-        for (&(i, _), be) in images.iter().zip(iter) {
-            let (binding, element) = be?;
+        for (&(i, _), (binding, element)) in images.iter().zip(iter) {
             if !descriptor_type.supports_image_usage(i.usage()) {
-                return Err(Error::InvalidArgument);
+                panic!("Image missing usage flag for {descriptor_type:?}");
             }
             assert_eq!(i.device(), self.updates.device);
             self.updates.resources.push(Resource {
@@ -435,14 +431,14 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
             buffer_info: None,
             texel_buffer_view: None,
         });
-        Ok(self)
+        self
     }
     /// Update sampled image bindings.
     #[doc = image_checks!()]
     pub fn sampled_images(
         self, dst_binding: u32, dst_array_element: u32,
         images: &[(&'s ImageView, ImageLayout)],
-    ) -> Result<Self> {
+    ) -> Self {
         self.images_impl(
             dst_binding,
             dst_array_element,
@@ -455,7 +451,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     pub fn storage_images(
         self, dst_binding: u32, dst_array_element: u32,
         images: &[(&'s ImageView, ImageLayout)],
-    ) -> Result<Self> {
+    ) -> Self {
         self.images_impl(
             dst_binding,
             dst_array_element,
@@ -468,7 +464,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     pub fn input_attachments(
         self, dst_binding: u32, dst_array_element: u32,
         images: &[(&'s ImageView, ImageLayout)],
-    ) -> Result<Self> {
+    ) -> Self {
         self.images_impl(
             dst_binding,
             dst_array_element,
@@ -482,15 +478,14 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
     pub fn combined_image_samplers(
         mut self, dst_binding: u32, dst_array_element: u32,
         images: &[(&'s ImageView, ImageLayout)],
-    ) -> Result<Self> {
+    ) -> Self {
         let iter = BindingIter::new(
             self.set.layout.bindings(),
             dst_binding as usize,
             dst_array_element,
             DescriptorType::COMBINED_IMAGE_SAMPLER,
         );
-        for (&(i, _), be) in images.iter().zip(iter) {
-            let (binding, element) = be?;
+        for (&(i, _), (binding, element)) in images.iter().zip(iter) {
             assert_eq!(i.device(), self.updates.device);
             self.updates.resources.push(Resource {
                 set: self.updates.dst_sets.len(),
@@ -518,7 +513,7 @@ impl<'u, 's> DescriptorSetUpdate<'u, 's> {
             buffer_info: None,
             texel_buffer_view: None,
         });
-        Ok(self)
+        self
     }
 }
 
@@ -541,23 +536,35 @@ impl<'a> BindingIter<'a> {
 }
 
 impl<'a> Iterator for BindingIter<'a> {
-    type Item = Result<(usize, usize)>;
+    type Item = (usize, usize);
     fn next(&mut self) -> Option<Self::Item> {
         if self.binding >= self.bindings.len() {
-            return Some(Err(Error::OutOfBounds));
+            panic!(
+                "Binding number out of bounds: {} vs {}",
+                self.binding,
+                self.bindings.len()
+            );
         }
         while self.element >= self.bindings[self.binding].descriptor_count {
             self.element -= self.bindings[self.binding].descriptor_count;
             self.binding += 1;
             if self.binding >= self.bindings.len() {
-                return Some(Err(Error::OutOfBounds));
+                panic!(
+                    "Binding number out of bounds: {} vs {}",
+                    self.binding,
+                    self.bindings.len()
+                );
             }
         }
         if self.bindings[self.binding].descriptor_type != self.descriptor_type {
-            return Some(Err(Error::InvalidArgument));
+            panic!(
+                "Wrong resources type, expected {:?}, got {:?}",
+                self.bindings[self.binding].descriptor_type,
+                self.descriptor_type
+            );
         }
         self.element += 1;
 
-        Some(Ok((self.binding, self.element as usize - 1)))
+        Some((self.binding, self.element as usize - 1))
     }
 }

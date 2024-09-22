@@ -6,7 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::error::Result;
 use crate::load;
 use crate::load::InstanceFn;
 use crate::types::*;
@@ -44,12 +43,14 @@ impl Eq for Instance {}
 impl Instance {
     /// Creates a new instance
     #[doc = crate::man_link!(vkCreateInstance)]
-    pub fn new<'a>(info: &'a InstanceCreateInfo<'a>) -> Result<Self> {
+    pub fn new<'a>(info: &'a InstanceCreateInfo<'a>) -> Self {
         let mut handle = None;
-        unsafe { (load::vk_create_instance())(info, None, &mut handle)? };
+        unsafe {
+            (load::vk_create_instance())(info, None, &mut handle).unwrap()
+        };
         let handle = handle.unwrap();
         let fun = InstanceFn::new(handle.borrow());
-        Ok(Instance { inner: Arc::new(Impl { handle, fun }) })
+        Instance { inner: Arc::new(Impl { handle, fun }) }
     }
 
     /// Borrows the inner Vulkan handle.

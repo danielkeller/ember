@@ -8,7 +8,6 @@
 
 use crate::device::Device;
 use crate::enums::*;
-use crate::error::{Error, Result};
 use crate::types::*;
 
 /// A
@@ -22,17 +21,15 @@ pub struct RenderPass {
 
 impl RenderPass {
     #[doc = crate::man_link!(vkCreateRenderPass)]
-    pub fn new(
-        device: &Device, info: &RenderPassCreateInfo,
-    ) -> Result<Arc<Self>> {
+    pub fn new(device: &Device, info: &RenderPassCreateInfo) -> Arc<Self> {
         for subpass in info.subpasses {
             if subpass.color_attachments.len()
                 > device.limits().max_color_attachments
             {
-                return Err(Error::LimitExceeded);
+                panic!("Too many color attachments")
             }
         }
-        let compat = RenderPassCompat::new(info)?;
+        let compat = RenderPassCompat::new(info);
         let mut handle = None;
         unsafe {
             (device.fun().create_render_pass)(
@@ -40,10 +37,11 @@ impl RenderPass {
                 info,
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
         let handle = handle.unwrap();
-        Ok(Arc::new(Self { handle, compat, device: device.clone() }))
+        Arc::new(Self { handle, compat, device: device.clone() })
     }
 
     /// Borrows the inner Vulkan handle.
@@ -138,19 +136,19 @@ impl PartialEq for SubpassCompat {
 }
 
 impl RenderPassCompat {
-    fn new(info: &RenderPassCreateInfo) -> Result<Self> {
+    fn new(info: &RenderPassCreateInfo) -> Self {
         let att_ref = |att: &AttachmentReference| {
             if att.attachment == u32::MAX {
-                Ok(None)
+                None
             } else if let Some(desc) =
                 info.attachments.as_slice().get(att.attachment as usize)
             {
-                Ok(Some(AttachmentRefCompat {
+                Some(AttachmentRefCompat {
                     format: desc.format,
                     samples: desc.samples,
-                }))
+                })
             } else {
-                Err(Error::OutOfBounds)
+                panic!("Attachment index {} out of bounds", att.attachment)
             }
         };
         let mut subpasses = vec![];
@@ -160,17 +158,17 @@ impl RenderPassCompat {
                     .input_attachments
                     .into_iter()
                     .map(att_ref)
-                    .collect::<Result<_>>()?,
+                    .collect(),
                 preserve_attachments: subpass
                     .color_attachments
                     .into_iter()
                     .map(att_ref)
-                    .collect::<Result<_>>()?,
+                    .collect(),
                 color_attachments: subpass
                     .color_attachments
                     .into_iter()
                     .map(att_ref)
-                    .collect::<Result<_>>()?,
+                    .collect(),
                 resolve_attachments: subpass
                     .resolve_attachments
                     .map_or(Default::default(), |a| unsafe {
@@ -178,7 +176,7 @@ impl RenderPassCompat {
                     })
                     .iter()
                     .map(att_ref)
-                    .collect::<Result<_>>()?,
+                    .collect(),
                 depth_stencil_attachments: subpass
                     .depth_stencil_attachments
                     .map_or(Default::default(), |a| unsafe {
@@ -186,13 +184,13 @@ impl RenderPassCompat {
                     })
                     .iter()
                     .map(att_ref)
-                    .collect::<Result<_>>()?,
+                    .collect(),
             });
         }
 
-        Ok(Self {
+        Self {
             subpasses,
             dependencies: info.dependencies.into_iter().cloned().collect(),
-        })
+        }
     }
 }

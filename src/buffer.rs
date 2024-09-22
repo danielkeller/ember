@@ -7,7 +7,6 @@
 // except according to those terms.
 
 use crate::enums::*;
-use crate::error::{Error, Result};
 use crate::memory::{DeviceMemory, MemoryInner};
 use crate::types::*;
 use crate::vk::Device;
@@ -42,7 +41,7 @@ impl std::ops::Deref for Buffer {
 #[allow(clippy::len_without_is_empty)]
 impl BufferWithoutMemory {
     #[doc = crate::man_link!(vkCreateBuffer)]
-    pub fn new(device: &Device, info: &BufferCreateInfo<'_>) -> Result<Self> {
+    pub fn new(device: &Device, info: &BufferCreateInfo<'_>) -> Self {
         let mut handle = None;
         unsafe {
             (device.fun().create_buffer)(
@@ -50,14 +49,15 @@ impl BufferWithoutMemory {
                 info,
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
-        Ok(BufferWithoutMemory {
+        BufferWithoutMemory {
             handle: handle.unwrap(),
             len: info.size,
             usage: info.usage,
             device: device.clone(),
-        })
+        }
     }
 
     /// Borrows the inner Vulkan handle.
@@ -131,10 +131,10 @@ impl Buffer {
     #[doc = crate::man_link!(vkBindBufferMemory)]
     pub fn new(
         mut buffer: BufferWithoutMemory, memory: &DeviceMemory, offset: u64,
-    ) -> Result<Self> {
+    ) -> Self {
         assert_eq!(memory.device(), &buffer.device);
         if !memory.check(offset, buffer.memory_requirements()) {
-            return Err(Error::InvalidArgument);
+            panic!("Memory does not meet requirements of buffer");
         }
 
         unsafe {
@@ -143,9 +143,10 @@ impl Buffer {
                 buffer.handle.borrow_mut(),
                 memory.handle(),
                 offset,
-            )?;
+            )
+            .unwrap();
         }
-        Ok(Buffer { inner: buffer, memory: memory.inner() })
+        Buffer { inner: buffer, memory: memory.inner() }
     }
 }
 

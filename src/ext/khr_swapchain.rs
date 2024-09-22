@@ -11,7 +11,7 @@ use std::mem::MaybeUninit;
 
 use crate::device::Device;
 use crate::enums::*;
-use crate::error::{Error, Result};
+use crate::error::{OutOfDeviceMemory, VkResult};
 use crate::ffi::ArrayMut;
 use crate::image::Image;
 use crate::queue::{Queue, SubmitScope};
@@ -81,7 +81,15 @@ impl SwapchainKHR {
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
     pub fn new(
         device: &Device, surface: SurfaceKHR, info: &SwapchainCreateInfoKHR,
-    ) -> Result<Self> {
+    ) -> Self {
+        Self::try_new(device, surface, info).unwrap()
+    }
+    /// Panics if the extension functions can't be loaded.
+    ///
+    #[doc = crate::man_link!(vkCreateSwapchainKHR)]
+    pub fn try_new(
+        device: &Device, surface: SurfaceKHR, info: &SwapchainCreateInfoKHR,
+    ) -> Result<Self, OutOfDeviceMemory> {
         let fun = SwapchainKHRFn::new(device);
         Self::create(device, surface, fun, info, None)
     }
@@ -91,7 +99,18 @@ impl SwapchainKHR {
     /// panic.
     ///
     #[doc = crate::man_link!(vkCreateSwapchainKHR)]
-    pub fn recreate(mut self, info: &SwapchainCreateInfoKHR) -> Result<Self> {
+    pub fn recreate(mut self, info: &SwapchainCreateInfoKHR) -> Self {
+        Self::try_recreate(self, info).unwrap()
+    }
+
+    /// [ImageView]s, [Framebuffer]s, and so on which refer to images that are
+    /// not acquired must be dropped before calling this function, or it will
+    /// panic.
+    ///
+    #[doc = crate::man_link!(vkCreateSwapchainKHR)]
+    pub fn try_recreate(
+        mut self, info: &SwapchainCreateInfoKHR,
+    ) -> Result<Self, OutOfDeviceMemory> {
         let inner = &mut *self.inner;
         for (i, image) in self.images.iter_mut().enumerate() {
             if !self.image_acquired[i]
@@ -116,7 +135,7 @@ impl SwapchainKHR {
         device: &Device, mut surface: SurfaceKHR, fun: SwapchainKHRFn,
         info: &SwapchainCreateInfoKHR,
         old_swapchain: Option<Mut<VkSwapchainKHR>>,
-    ) -> Result<Self> {
+    ) -> Result<Self, OutOfDeviceMemory> {
         let mut handle = None;
         unsafe {
             (fun.create_swapchain_khr)(
@@ -142,7 +161,8 @@ impl SwapchainKHR {
                 },
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap_or_oom()?;
         }
         let handle = handle.unwrap();
 
@@ -154,14 +174,16 @@ impl SwapchainKHR {
                 handle.borrow(),
                 &mut n_images,
                 None,
-            )?;
+            )
+            .unwrap();
             images.reserve(n_images as usize);
             (fun.get_swapchain_images_khr)(
                 device.handle(),
                 handle.borrow(),
                 &mut n_images,
                 ArrayMut::from_slice(images.spare_capacity_mut()),
-            )?;
+            )
+            .unwrap();
             images.set_len(n_images as usize);
         }
 
@@ -235,7 +257,7 @@ impl<'scope> SubmitScope<'scope> {
     pub fn acquire_next_image(
         &mut self, swapchain: &mut SwapchainKHR, timeout: u64,
         semaphore: &'scope mut Semaphore, wait_mask: PipelineStageFlags,
-    ) -> Result<(usize, ImageOptimality)> {
+    ) -> Result<(usize, ImageOptimality), AcquireError> {
         let inner = &mut *swapchain.inner;
         let mut index = 0;
         let res = unsafe {
@@ -249,12 +271,11 @@ impl<'scope> SubmitScope<'scope> {
             )
         };
         self.wait(semaphore, wait_mask);
-        let is_optimal = match res {
-            Ok(()) => ImageOptimality::Optimal,
-            Err(e) => match e.into() {
-                Error::SuboptimalHKR => ImageOptimality::Suboptimal,
-                other => return Err(other),
-            },
+        res.unwrap_or_acquire_error()?;
+        let is_optimal = if res == VkResult::SUBOPTIMAL_HKR {
+            ImageOptimality::Suboptimal
+        } else {
+            ImageOptimality::Optimal
         };
         Ok((index as usize, is_optimal))
     }
@@ -264,7 +285,7 @@ impl<'scope> SubmitScope<'scope> {
     pub fn present(
         &mut self, swapchain: &mut SwapchainKHR, image: usize,
         semaphore: &mut Semaphore,
-    ) -> Result<ImageOptimality> {
+    ) -> ImageOptimality {
         assert!(image < swapchain.images.len(), "'image' out of bounds");
         let inner = &mut *swapchain.inner;
 
@@ -281,15 +302,12 @@ impl<'scope> SubmitScope<'scope> {
                 },
             )
         };
-        let is_optimal = match res {
-            Ok(()) => ImageOptimality::Optimal,
-            Err(e) => match e.into() {
-                Error::SuboptimalHKR => ImageOptimality::Suboptimal,
-                other => return Err(other),
-            },
-        };
-
-        Ok(is_optimal)
+        res.unwrap();
+        if res == VkResult::SUBOPTIMAL_HKR {
+            ImageOptimality::Suboptimal
+        } else {
+            ImageOptimality::Optimal
+        }
     }
 }
 
@@ -421,5 +439,55 @@ impl SwapchainKHRFn {
 impl std::fmt::Debug for SwapchainKHRFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SwapchainKHRFn").finish()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct OutOfDateKHR;
+
+impl std::fmt::Display for OutOfDateKHR {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Swapchain out of date")
+    }
+}
+impl std::error::Error for OutOfDateKHR {}
+
+impl VkResult {
+    #[track_caller]
+    pub fn unwrap_or_out_of_date(self) -> Result<(), OutOfDateKHR> {
+        match self {
+            Self::OUT_OF_DATE_KHR => Err(OutOfDateKHR),
+            other => Ok(other.unwrap()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcquireError {
+    OutOfDate,
+    Timeout,
+    NotReady,
+}
+
+impl std::fmt::Display for AcquireError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AcquireError::OutOfDate => f.write_str("Swapchain out of date"),
+            AcquireError::Timeout => f.write_str("Timout"),
+            AcquireError::NotReady => f.write_str("Not ready"),
+        }
+    }
+}
+impl std::error::Error for AcquireError {}
+
+impl VkResult {
+    #[track_caller]
+    pub fn unwrap_or_acquire_error(self) -> Result<(), AcquireError> {
+        match self {
+            Self::OUT_OF_DATE_KHR => Err(AcquireError::OutOfDate),
+            Self::TIMEOUT => Err(AcquireError::Timeout),
+            Self::NOT_READY => Err(AcquireError::NotReady),
+            other => Ok(other.unwrap()),
+        }
     }
 }

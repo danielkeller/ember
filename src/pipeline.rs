@@ -14,7 +14,6 @@ use crate::descriptor_set::DescriptorSetLayout;
 use crate::device::Device;
 use crate::enums::*;
 use crate::enums::{PipelineLayoutCreateFlags, ShaderStageFlags};
-use crate::error::{Error, Result};
 use crate::ffi::*;
 use crate::render_pass::RenderPass;
 use crate::types::*;
@@ -34,15 +33,20 @@ pub struct PipelineLayout {
 }
 
 impl PipelineLayout {
+    /// Panics if the pipeline layout exceeds the limits in `device.limits()`.
     #[doc = crate::man_link!(vkCreatePipelineLayout)]
     pub fn new(
         device: &Device, flags: PipelineLayoutCreateFlags,
         set_layouts: &[&DescriptorSetLayout],
         push_constant_ranges: Vec<PushConstantRange>,
-    ) -> Result<PipelineLayout> {
+    ) -> PipelineLayout {
         let lim = &device.limits();
         if set_layouts.len() > lim.max_bound_descriptor_sets as usize {
-            return Err(Error::LimitExceeded);
+            panic!(
+                "Maximum number of descriptor sets exceeded: {} > {}",
+                set_layouts.len(),
+                lim.max_bound_descriptor_sets
+            );
         }
         for stage in [
             ShaderStageFlags::COMPUTE,
@@ -76,7 +80,7 @@ impl PipelineLayout {
                     + (storage_dyn + input)
                     > lim.max_per_stage_resources
             {
-                return Err(Error::LimitExceeded);
+                panic!("Per-stage descriptor limit exceeded");
             }
         }
         {
@@ -96,7 +100,7 @@ impl PipelineLayout {
             let input = of(DescriptorType::INPUT_ATTACHMENT);
             if sampler + image_sampler > lim.max_descriptor_set_samplers
                 || uniform + uniform_dyn
-                    > lim.max_per_stage_descriptor_uniform_buffers
+                    > lim.max_descriptor_set_uniform_buffers
                 || uniform_dyn > lim.max_descriptor_set_uniform_buffers_dynamic
                 || storage + storage_dyn
                     > lim.max_descriptor_set_storage_buffers
@@ -107,13 +111,13 @@ impl PipelineLayout {
                     > lim.max_descriptor_set_storage_images
                 || input > lim.max_descriptor_set_input_attachments
             {
-                return Err(Error::LimitExceeded);
+                panic!("Per-pipeline descriptor limit exceeded");
             }
         }
         for range in &push_constant_ranges {
             let max = lim.max_push_constants_size;
             if max < range.offset || max - range.offset < range.size {
-                return Err(Error::LimitExceeded);
+                panic!("Push constant byte limit exceeded");
             }
         }
         let mut handle = None;
@@ -130,25 +134,28 @@ impl PipelineLayout {
                 },
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
         let set_layouts = set_layouts.iter().map(|&s| s.clone()).collect();
-        let push_constant_voids = find_voids(&push_constant_ranges)?;
-        Ok(PipelineLayout {
+        let push_constant_voids = find_voids(&push_constant_ranges);
+        PipelineLayout {
             handle: handle.unwrap(),
             set_layouts,
             push_constant_ranges,
             push_constant_voids,
             device: device.clone(),
-        })
+        }
     }
 }
 
-fn find_voids(ranges: &[PushConstantRange]) -> Result<Vec<Range<u32>>> {
+fn find_voids(ranges: &[PushConstantRange]) -> Vec<Range<u32>> {
     let mut result = vec![0..u32::MAX];
     for range in ranges {
-        let end =
-            range.offset.checked_add(range.size).ok_or(Error::OutOfBounds)?;
+        let end = range
+            .offset
+            .checked_add(range.size)
+            .expect("Push constant range integer overflow");
         let mut result1 = vec![];
         for void in result {
             if range.offset > void.start && end < void.end {
@@ -162,7 +169,7 @@ fn find_voids(ranges: &[PushConstantRange]) -> Result<Vec<Range<u32>>> {
         }
         result = result1;
     }
-    Ok(result)
+    result
 }
 
 fn matching_resources(
@@ -248,28 +255,25 @@ pub struct GraphicsPipelineCreateInfo<'a> {
 
 impl Pipeline {
     // TODO: Bulk create
-    /// Returns [`Error::OutOfBounds`] if `info.subpass` is out of bounds of
-    /// `info.render_pass`, or the specialization constants are out of bounds.
-    /// Returns [`Error::InvalidArgument`] if any vertex input binding number are
-    /// repeated, any vertex attribute locations are repeated, or any vertex
-    /// attributes refer to a nonexistent binding.
-    #[doc = crate::man_link!(vkCreateGraphicsPipeline)]
-    pub fn new_graphics(
-        info: GraphicsPipelineCreateInfo<'_>,
-    ) -> Result<Arc<Self>> {
+    /// Panics if `info.subpass` is out of bounds of `info.render_pass`, the
+    /// specialization constants are out of bounds, if any vertex input binding
+    /// number are repeated, any vertex attribute locations are repeated, or any
+    /// vertex attributes refer to a nonexistent binding.
+    #[doc = crate::man_link!(vkCreateGraphicsPipelines)]
+    pub fn new_graphics(info: GraphicsPipelineCreateInfo<'_>) -> Arc<Self> {
         let lim = info.render_pass.device.limits();
         if info.subpass >= info.render_pass.num_subpasses() {
-            return Err(Error::OutOfBounds);
+            panic!("Subpass index {} out of bounds", info.subpass);
         }
         let mut bindings = HashSet::new();
         for b in info.vertex_input_state.vertex_binding_descriptions {
             if b.binding > lim.max_vertex_input_bindings
                 || b.stride > lim.max_vertex_input_binding_stride
             {
-                return Err(Error::LimitExceeded);
+                panic!("Vertex input binding limit exceeded");
             }
             if !bindings.insert(b.binding) {
-                return Err(Error::InvalidArgument);
+                panic!("Binding index repeated");
             }
         }
         let mut locations = HashSet::new();
@@ -277,16 +281,17 @@ impl Pipeline {
             if att.location > lim.max_vertex_input_attributes
                 || att.offset > lim.max_vertex_input_attribute_offset
             {
-                return Err(Error::LimitExceeded);
+                panic!("Vertex input attribute limit exceeded");
             }
-            if !locations.insert(att.location)
-                || !bindings.contains(&att.binding)
-            {
-                return Err(Error::InvalidArgument);
+            if !locations.insert(att.location) {
+                panic!("Attribute location repeated");
+            }
+            if !bindings.contains(&att.binding) {
+                panic!("Attribute refers to non-existent binding");
             }
         }
         if info.viewport_state.viewports.len() > lim.max_viewports {
-            return Err(Error::LimitExceeded);
+            panic!("Viewport count limit exceeded");
         }
         for viewport in info.viewport_state.viewports {
             if viewport.height as u32 > lim.max_viewport_dimensions[0]
@@ -296,11 +301,11 @@ impl Pipeline {
                 || viewport.x + viewport.width > lim.viewport_bounds_range[1]
                 || viewport.y + viewport.height > lim.viewport_bounds_range[1]
             {
-                return Err(Error::LimitExceeded);
+                panic!("Viewport bounds limit exceeded");
             }
         }
         for stage in info.stages {
-            check_specialization_constants(stage)?;
+            check_specialization_constants(stage);
         }
         let vk_info = VkGraphicsPipelineCreateInfo {
             stype: Default::default(),
@@ -331,22 +336,23 @@ impl Pipeline {
                 std::array::from_ref(&vk_info).into(),
                 None,
                 std::array::from_mut(&mut handle).into(),
-            )?;
+            )
+            .unwrap();
         }
-        Ok(Arc::new(Pipeline {
+        Arc::new(Pipeline {
             handle: unsafe { handle.assume_init() },
             layout: info.layout,
             render_pass: Some(info.render_pass.clone()),
             subpass: info.subpass,
-        }))
+        })
     }
     /// Returns [`Error::OutOfBounds`] if the specialization constants are out of
     /// bounds.
     #[doc = crate::man_link!(vkCreateComputePipeline)]
     pub fn new_compute(
         stage: PipelineShaderStageCreateInfo, layout: &Arc<PipelineLayout>,
-    ) -> Result<Arc<Pipeline>> {
-        check_specialization_constants(&stage)?;
+    ) -> Arc<Pipeline> {
+        check_specialization_constants(&stage);
         let info = ComputePipelineCreateInfo {
             stype: Default::default(),
             next: Default::default(),
@@ -365,14 +371,15 @@ impl Pipeline {
                 std::array::from_ref(&info).into(),
                 None,
                 std::array::from_mut(&mut handle).into(),
-            )?;
+            )
+            .unwrap();
         }
-        Ok(Arc::new(Pipeline {
+        Arc::new(Pipeline {
             handle: unsafe { handle.assume_init() },
             layout: layout.clone(),
             render_pass: None,
             subpass: 0,
-        }))
+        })
     }
 }
 
@@ -410,19 +417,16 @@ impl Drop for Pipeline {
     }
 }
 
-fn check_specialization_constants<T>(
-    info: &PipelineShaderStageCreateInfo<T>,
-) -> Result<()> {
+fn check_specialization_constants<T>(info: &PipelineShaderStageCreateInfo<T>) {
     if let Some(spec) = &info.specialization_info {
         for entry in spec.map_entries {
             if spec.data.len() < entry.offset as usize
                 || spec.data.len() - (entry.offset as usize) < entry.size
             {
-                return Err(Error::OutOfBounds);
+                panic!("Specialization data out of bounds")
             }
         }
     }
-    Ok(())
 }
 
 #[cfg(pipeline_cache)]

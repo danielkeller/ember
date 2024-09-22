@@ -8,7 +8,6 @@
 
 use crate::buffer::Buffer;
 use crate::enums::*;
-use crate::error::{Error, Result};
 use crate::ffi::Array;
 use crate::image::Image;
 use crate::types::*;
@@ -23,18 +22,18 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     pub fn fill_buffer(
         &mut self, dst: &'pool Buffer, offset: u64, size: Option<u64>,
         data: u32,
-    ) -> Result<()> {
+    ) {
         let offset = offset & !3;
         let size = match size {
             Some(size) => {
                 if !dst.bounds_check(offset, size) {
-                    return Err(Error::OutOfBounds);
+                    panic!("Buffer offset out of bounds");
                 }
                 size & !3
             }
             None => {
                 if !dst.bounds_check(offset, 0) {
-                    return Err(Error::OutOfBounds);
+                    panic!("Buffer offset out of bounds");
                 }
                 u64::MAX
             }
@@ -48,7 +47,6 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 data,
             );
         }
-        Ok(())
     }
 
     /// The reference counts of `src` and `dst` are incremented.
@@ -57,12 +55,12 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     pub fn copy_buffer(
         &mut self, src: &'pool Buffer, dst: &'pool Buffer,
         regions: &[BufferCopy],
-    ) -> Result<()> {
+    ) {
         for r in regions {
             if !src.bounds_check(r.src_offset, r.size)
                 || !dst.bounds_check(r.dst_offset, r.size)
             {
-                return Err(Error::OutOfBounds);
+                panic!("Buffer region out of bounds")
             }
         }
         unsafe {
@@ -71,10 +69,9 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 src.handle(),
                 dst.handle(),
                 regions.len() as u32,
-                Array::from_slice(regions).ok_or(Error::InvalidArgument)?,
+                Array::from_slice(regions).expect("Buffer regions empty"),
             );
         }
-        Ok(())
     }
 
     /// The reference counts of `src` and `dst` are incremented.
@@ -84,12 +81,12 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     pub fn copy_buffer_to_image(
         &mut self, src: &'pool Buffer, dst: &'pool Image,
         dst_layout: ImageLayout, regions: &[BufferImageCopy],
-    ) -> Result<()> {
+    ) {
         for r in regions {
             let bytes = image_byte_size_3d(dst.format(), r.image_extent)
-                .ok_or(Error::OutOfBounds)?
+                .expect("Image region size overflows")
                 .checked_mul(r.image_subresource.layer_count as u64)
-                .ok_or(Error::OutOfBounds)?;
+                .expect("Image region size overflows");
             if !dst.bounds_check(
                 r.image_subresource.mip_level,
                 r.image_offset,
@@ -99,7 +96,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 r.image_subresource.layer_count,
             ) || !src.bounds_check(r.buffer_offset, bytes)
             {
-                return Err(Error::OutOfBounds);
+                panic!("Image region out of bounds")
             }
         }
         unsafe {
@@ -109,10 +106,9 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 dst.handle(),
                 dst_layout,
                 regions.len() as u32,
-                Array::from_slice(regions).ok_or(Error::InvalidArgument)?,
+                Array::from_slice(regions).expect("Image regions empty"),
             );
         }
-        Ok(())
     }
 
     /// The reference counts of `src` and `dst` are incremented.
@@ -123,20 +119,23 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
         &mut self, src: &'pool Image, src_layout: ImageLayout,
         dst: &'pool Image, dst_layout: ImageLayout, regions: &[ImageBlit],
         filter: Filter,
-    ) -> Result<()> {
+    ) {
         for r in regions {
             if !src.array_bounds_check(
                 r.src_subresource.base_array_layer,
                 r.src_subresource.layer_count,
-            ) || !dst.array_bounds_check(
-                r.dst_subresource.base_array_layer,
-                r.dst_subresource.layer_count,
             ) || !src.offset_bounds_check(
                 r.src_subresource.mip_level,
                 r.src_offsets[0],
             ) || !src.offset_bounds_check(
                 r.src_subresource.mip_level,
                 r.src_offsets[1],
+            ) {
+                panic!("Region out of bounds of source image")
+            }
+            if !dst.array_bounds_check(
+                r.dst_subresource.base_array_layer,
+                r.dst_subresource.layer_count,
             ) || !dst.offset_bounds_check(
                 r.dst_subresource.mip_level,
                 r.dst_offsets[0],
@@ -144,7 +143,7 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 r.dst_subresource.mip_level,
                 r.dst_offsets[1],
             ) {
-                return Err(Error::OutOfBounds);
+                panic!("Region out of bounds of destination image")
             }
         }
         unsafe {
@@ -155,11 +154,10 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 dst.handle(),
                 dst_layout,
                 regions.len() as u32,
-                Array::from_slice(regions).ok_or(Error::InvalidArgument)?,
+                Array::from_slice(regions).expect("No blit regions"),
                 filter,
             );
         }
-        Ok(())
     }
 
     /// The reference count of `image` is incremented. Returns
@@ -168,8 +166,8 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     pub fn clear_color_image(
         &mut self, image: &'pool Image, layout: ImageLayout,
         color: ClearColorValue, ranges: &[ImageSubresourceRange],
-    ) -> Result<()> {
-        let array = Array::from_slice(ranges).ok_or(Error::InvalidArgument)?;
+    ) {
+        let array = Array::from_slice(ranges).expect("No clear ranges");
         unsafe {
             (self.device.fun().cmd_clear_color_image)(
                 self.buffer.handle_mut(),
@@ -180,7 +178,5 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 array,
             )
         }
-
-        Ok(())
     }
 }

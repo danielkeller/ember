@@ -14,7 +14,6 @@
 use std::mem::transmute;
 use std::ptr::NonNull;
 
-use crate::error::{Error, Result};
 use crate::ext::{self, KHRXlibSurface};
 use crate::ext::{KHRWaylandSurface, KHRWin32Surface, SurfaceKHR};
 use crate::ffi::*;
@@ -28,44 +27,44 @@ use raw_window_handle::{
 /// Return the required instance extensions to use WSI on the current platform.
 pub fn required_instance_extensions(
     display: &impl HasDisplayHandle,
-) -> Result<&'static [Str<'static>]> {
+) -> &'static [Str<'static>] {
     match display.display_handle().unwrap().as_raw() {
         RawDisplayHandle::Windows(_) => {
             const WINDOWS_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::WIN32_SURFACE];
-            Ok(&WINDOWS_EXTS)
+            &WINDOWS_EXTS
         }
         RawDisplayHandle::Wayland(_) => {
             const WAYLAND_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::WAYLAND_SURFACE];
-            Ok(&WAYLAND_EXTS)
+            &WAYLAND_EXTS
         }
         RawDisplayHandle::Xlib(_) => {
             const XLIB_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::XLIB_SURFACE];
-            Ok(&XLIB_EXTS)
+            &XLIB_EXTS
         }
         RawDisplayHandle::Xcb(_) => {
             const XCB_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::XCB_SURFACE];
-            Ok(&XCB_EXTS)
+            &XCB_EXTS
         }
         RawDisplayHandle::Android(_) => {
             const ANDROID_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::ANDROID_SURFACE];
-            Ok(&ANDROID_EXTS)
+            &ANDROID_EXTS
         }
         RawDisplayHandle::AppKit(_) => {
             const MACOS_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::METAL_SURFACE];
-            Ok(&MACOS_EXTS)
+            &MACOS_EXTS
         }
         RawDisplayHandle::UiKit(_) => {
             const IOS_EXTS: [Str<'static>; 2] =
                 [ext::SURFACE, ext::METAL_SURFACE];
-            Ok(&IOS_EXTS)
+            &IOS_EXTS
         }
-        _ => Err(Error::ExtensionNotPresent),
+        handle => panic!("Unsupported window handle type {handle:?}"),
     }
 }
 
@@ -96,7 +95,7 @@ pub fn presentation_support(
         },
         RawDisplayHandle::Windows(_) => KHRWin32Surface::new(phy.instance())
             .presentation_support(phy, queue_family_index),
-        handle => panic!("Unimplemented window handle type: {:?}", handle),
+        handle => panic!("Unsupported window handle type {handle:?}"),
     }
 }
 
@@ -105,7 +104,7 @@ pub fn presentation_support(
 pub fn create_surface<'i>(
     instance: &'i Instance, display: &impl HasDisplayHandle,
     window: &impl HasWindowHandle,
-) -> Result<SurfaceKHR> {
+) -> SurfaceKHR {
     match (
         display.display_handle().unwrap().as_raw(),
         window.window_handle().unwrap().as_raw(),
@@ -167,6 +166,6 @@ pub fn create_surface<'i>(
                 },
             )
         },
-        _ => Err(Error::ExtensionNotPresent),
+        dw => panic!("Unsupported display and window combination {dw:?}"),
     }
 }

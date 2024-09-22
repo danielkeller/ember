@@ -13,7 +13,7 @@ use std::ptr::NonNull;
 use crate::enums::*;
 use crate::types::*;
 
-use crate::error::Result;
+use crate::error::VkResult;
 use crate::instance::Instance;
 use crate::physical_device::PhysicalDevice;
 
@@ -47,15 +47,16 @@ impl<'i> KHRWaylandSurface<'i> {
     #[doc = crate::man_link!(vkCreateWaylandSurfaceKHR)]
     pub unsafe fn create_wayland_surface_ext(
         &self, info: &WaylandSurfaceCreateInfoKHR,
-    ) -> Result<SurfaceKHR> {
+    ) -> SurfaceKHR {
         let mut handle = None;
         (self.fun.create_wayland_surface_khr)(
             self.instance.handle(),
             info,
             None,
             &mut handle,
-        )?;
-        Ok(SurfaceKHR::new(handle.unwrap(), self.instance))
+        )
+        .unwrap();
+        SurfaceKHR::new(handle.unwrap(), self.instance)
     }
 }
 

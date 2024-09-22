@@ -9,6 +9,7 @@
 use crate::device::Device;
 use crate::enums::Bool;
 use crate::enums::*;
+use crate::error::VkResult;
 use crate::ffi::*;
 use crate::instance::Instance;
 use crate::types::*;

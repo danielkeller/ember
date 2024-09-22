@@ -10,7 +10,7 @@ use std::intrinsics::transmute;
 use std::mem::MaybeUninit;
 
 use crate::enums::*;
-use crate::error::{Error, Result};
+use crate::error::VkResult;
 use crate::ffi::ArrayMut;
 use crate::instance::Instance;
 use crate::physical_device::PhysicalDevice;
@@ -61,13 +61,11 @@ impl SurfaceKHR {
     /// Returns true if the surface supports `phy` on `queue_family`. Returns
     /// [`Error::OutOfBounds`] if `queue_family` is out of bounds.
     #[doc = crate::man_link!(vkGetPhysicalDeviceSurfaceSupportKHR)]
-    pub fn support(
-        &self, phy: &PhysicalDevice, queue_family: u32,
-    ) -> Result<bool> {
+    pub fn support(&self, phy: &PhysicalDevice, queue_family: u32) -> bool {
         let mut result = Bool::False;
         assert_eq!(&self.instance, phy.instance());
         if (queue_family as usize) >= phy.queue_family_properties().len() {
-            return Err(Error::OutOfBounds);
+            panic!("Queue family out of bounds");
         }
         unsafe {
             (self.fun.get_physical_device_surface_support_khr)(
@@ -75,15 +73,14 @@ impl SurfaceKHR {
                 queue_family,
                 self.handle(),
                 &mut result,
-            )?;
+            )
+            .unwrap();
         }
-        Ok(result.into())
+        result.into()
     }
 
     #[doc = crate::man_link!(vkGetPhysicalDeviceSurfaceCapabilitiesKHR)]
-    pub fn capabilities(
-        &self, phy: &PhysicalDevice,
-    ) -> Result<SurfaceCapabilitiesKHR> {
+    pub fn capabilities(&self, phy: &PhysicalDevice) -> SurfaceCapabilitiesKHR {
         assert_eq!(&self.instance, phy.instance());
         // Check phy support?
         let mut result = MaybeUninit::uninit();
@@ -92,15 +89,16 @@ impl SurfaceKHR {
                 phy.handle(),
                 self.handle(),
                 &mut result,
-            )?;
-            Ok(result.assume_init())
+            )
+            .unwrap();
+            result.assume_init()
         }
     }
 
     #[doc = crate::man_link!(vkGetPhysicalDeviceSurfaceFormatsKHR)]
     pub fn surface_formats(
         &self, phy: &PhysicalDevice,
-    ) -> Result<Vec<SurfaceFormatKHR>> {
+    ) -> Vec<SurfaceFormatKHR> {
         assert_eq!(&self.instance, phy.instance());
         let mut len = 0;
         let mut result = vec![];
@@ -110,17 +108,19 @@ impl SurfaceKHR {
                 self.handle(),
                 &mut len,
                 None,
-            )?;
+            )
+            .unwrap();
             result.reserve(len as usize);
             (self.fun.get_physical_device_surface_formats_khr)(
                 phy.handle(),
                 self.handle(),
                 &mut len,
                 ArrayMut::from_slice(result.spare_capacity_mut()),
-            )?;
+            )
+            .unwrap();
             result.set_len(len as usize);
         }
-        Ok(result)
+        result
     }
 }
 

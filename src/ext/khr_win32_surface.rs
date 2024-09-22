@@ -11,7 +11,7 @@ use std::intrinsics::transmute;
 use crate::enums::*;
 use crate::types::*;
 
-use crate::error::Result;
+use crate::error::VkResult;
 use crate::instance::Instance;
 use crate::physical_device::PhysicalDevice;
 
@@ -45,15 +45,16 @@ impl<'i> KHRWin32Surface<'i> {
     #[doc = crate::man_link!(vkCreateWin32SurfaceKHR)]
     pub unsafe fn create_win32_surface_ext(
         &self, info: &Win32SurfaceCreateInfoKHR,
-    ) -> Result<SurfaceKHR> {
+    ) -> SurfaceKHR {
         let mut handle = None;
         (self.fun.create_win32_surface_khr)(
             self.instance.handle(),
             info,
             None,
             &mut handle,
-        )?;
-        Ok(SurfaceKHR::new(handle.unwrap(), self.instance))
+        )
+        .unwrap();
+        SurfaceKHR::new(handle.unwrap(), self.instance)
     }
 }
 

@@ -7,7 +7,6 @@
 // except according to those terms.
 
 use crate::buffer::Buffer;
-use crate::error::{Error, Result};
 use crate::ffi::Array;
 use crate::render_pass::RenderPass;
 use crate::types::*;
@@ -71,30 +70,28 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
 }
 
 impl<'rec> Bindings<'rec> {
-    fn check(&self) -> Result<()> {
+    fn check(&self) {
         if let Some(pipeline) = self.pipeline.as_ref() {
             // Is this not just checked by inited?
             let layouts = pipeline.layout().layouts();
-            if self.layout.len() >= layouts.len()
-                && self.layout[0..layouts.len()]
+            if self.layout.len() < layouts.len()
+                || !self.layout[0..layouts.len()]
                     .iter()
                     .copied()
                     .eq(layouts.iter())
-                && self.inited.iter().take_while(|b| **b).count()
-                    >= layouts.len()
+                || self.inited.iter().take_while(|b| **b).count()
+                    < layouts.len()
             {
-                return Ok(());
+                panic!("Not enough descriptor sets bound")
             }
         }
-        Err(Error::InvalidState)
     }
-    fn check_render_pass(&self, pass: &RenderPass, subpass: u32) -> Result<()> {
+    fn check_render_pass(&self, pass: &RenderPass, subpass: u32) {
         if let Some(pipeline) = self.pipeline.as_ref() {
-            if pipeline.is_compatible_with(pass, subpass) {
-                return Ok(());
+            if !pipeline.is_compatible_with(pass, subpass) {
+                panic!("Pipeline not compatible with render pass")
             }
         }
-        Err(Error::InvalidState)
     }
 }
 
@@ -114,8 +111,8 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     pub fn draw(
         &mut self, vertex_count: u32, instance_count: u32, first_vertex: u32,
         first_instance: u32,
-    ) -> Result<()> {
-        self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
+    ) {
+        self.rec.graphics.check_render_pass(&self.pass, self.subpass);
         self.rec.draw(
             vertex_count,
             instance_count,
@@ -131,8 +128,8 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     pub fn draw_indirect(
         &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
-    ) -> Result<()> {
-        self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
+    ) {
+        self.rec.graphics.check_render_pass(&self.pass, self.subpass);
         self.rec.draw_indirect(buffer, offset, draw_count, stride)
     }
     #[doc = draw_state!()]
@@ -141,8 +138,8 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     pub fn draw_indexed(
         &mut self, index_count: u32, instance_count: u32, first_index: u32,
         vertex_offset: i32, first_instance: u32,
-    ) -> Result<()> {
-        self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
+    ) {
+        self.rec.graphics.check_render_pass(&self.pass, self.subpass);
         self.rec.draw_indexed(
             index_count,
             instance_count,
@@ -159,8 +156,8 @@ impl<'rec, 'pool> RenderPassRecording<'rec, 'pool> {
     pub fn draw_indexed_indirect(
         &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
-    ) -> Result<()> {
-        self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
+    ) {
+        self.rec.graphics.check_render_pass(&self.pass, self.subpass);
         self.rec.draw_indexed_indirect(buffer, offset, draw_count, stride)
     }
 }
@@ -171,8 +168,8 @@ impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     pub fn draw(
         &mut self, vertex_count: u32, instance_count: u32, first_vertex: u32,
         first_instance: u32,
-    ) -> Result<()> {
-        self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
+    ) {
+        self.rec.graphics.check_render_pass(&self.pass, self.subpass);
         self.rec.draw(
             vertex_count,
             instance_count,
@@ -188,8 +185,8 @@ impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     pub fn draw_indirect(
         &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
-    ) -> Result<()> {
-        self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
+    ) {
+        self.rec.graphics.check_render_pass(&self.pass, self.subpass);
         self.rec.draw_indirect(buffer, offset, draw_count, stride)
     }
     #[doc = draw_state!()]
@@ -198,8 +195,8 @@ impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     pub fn draw_indexed(
         &mut self, index_count: u32, instance_count: u32, first_index: u32,
         vertex_offset: i32, first_instance: u32,
-    ) -> Result<()> {
-        self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
+    ) {
+        self.rec.graphics.check_render_pass(&self.pass, self.subpass);
         self.rec.draw_indexed(
             index_count,
             instance_count,
@@ -216,35 +213,38 @@ impl<'rec, 'pool> SecondaryCommandRecording<'rec, 'pool> {
     pub fn draw_indexed_indirect(
         &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
-    ) -> Result<()> {
-        self.rec.graphics.check_render_pass(&self.pass, self.subpass)?;
+    ) {
+        self.rec.graphics.check_render_pass(&self.pass, self.subpass);
         self.rec.draw_indexed_indirect(buffer, offset, draw_count, stride)
     }
 }
 
-fn bounds_check_n(
+fn bounds_check_indirect_buffer(
     count: u32, size: u32, mut stride: u32, buf: &Buffer, offset: u64,
-) -> Result<()> {
+) {
     if count < 2 {
         stride = size;
     }
-    if stride < size || offset & 3 != 0 {
-        return Err(Error::InvalidArgument);
+    if stride < size {
+        panic!("Indirect buffer stride less than item size")
     }
-    let len =
-        (count as u64).checked_mul(stride as u64).ok_or(Error::OutOfBounds)?;
+    if offset & 3 != 0 {
+        panic!("Indirect buffer offset not sufficiently aligned")
+    }
+    let len = (count as u64)
+        .checked_mul(stride as u64)
+        .expect("Indirect buffer size overflows");
     if !buf.bounds_check(offset, len) {
-        return Err(Error::OutOfBounds);
+        panic!("Indirect draw out of bounds of buffer")
     }
-    Ok(())
 }
 
 impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     fn draw(
         &mut self, vertex_count: u32, instance_count: u32, first_vertex: u32,
         first_instance: u32,
-    ) -> Result<()> {
-        self.graphics.check()?;
+    ) {
+        self.graphics.check();
         unsafe {
             (self.device.fun().cmd_draw)(
                 self.buffer.handle_mut(),
@@ -254,17 +254,16 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 first_instance,
             )
         }
-        Ok(())
     }
     fn draw_indirect(
         &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
-    ) -> Result<()> {
+    ) {
         if !buffer.usage().contains(BufferUsageFlags::INDIRECT_BUFFER) {
-            return Err(Error::InvalidArgument);
+            panic!("Buffer missing usage flag for indirect buffer");
         }
-        bounds_check_n(draw_count, 16, stride, buffer, offset)?;
-        self.graphics.check()?;
+        bounds_check_indirect_buffer(draw_count, 16, stride, buffer, offset);
+        self.graphics.check();
         unsafe {
             (self.device.fun().cmd_draw_indirect)(
                 self.buffer.handle_mut(),
@@ -274,13 +273,12 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 stride,
             )
         }
-        Ok(())
     }
     fn draw_indexed(
         &mut self, index_count: u32, instance_count: u32, first_index: u32,
         vertex_offset: i32, first_instance: u32,
-    ) -> Result<()> {
-        self.graphics.check()?;
+    ) {
+        self.graphics.check();
         unsafe {
             (self.device.fun().cmd_draw_indexed)(
                 self.buffer.handle_mut(),
@@ -291,17 +289,16 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 first_instance,
             )
         }
-        Ok(())
     }
     fn draw_indexed_indirect(
         &mut self, buffer: &'pool Buffer, offset: u64, draw_count: u32,
         stride: u32,
-    ) -> Result<()> {
-        bounds_check_n(draw_count, 20, stride, buffer, offset)?;
+    ) {
+        bounds_check_indirect_buffer(draw_count, 20, stride, buffer, offset);
         if !buffer.usage().contains(BufferUsageFlags::INDIRECT_BUFFER) {
-            return Err(Error::InvalidArgument);
+            panic!("Buffer missing usage flag for indirect buffer");
         }
-        self.graphics.check()?;
+        self.graphics.check();
         unsafe {
             (self.device.fun().cmd_draw_indexed_indirect)(
                 self.buffer.handle_mut(),
@@ -311,7 +308,6 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 stride,
             )
         }
-        Ok(())
     }
 }
 
@@ -319,8 +315,8 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdDispatch)]
     pub fn dispatch(
         &mut self, group_count_x: u32, group_count_y: u32, group_count_z: u32,
-    ) -> Result<()> {
-        self.compute.check()?;
+    ) {
+        self.compute.check();
         unsafe {
             (self.device.fun().cmd_dispatch)(
                 self.buffer.handle_mut(),
@@ -329,13 +325,10 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 group_count_z,
             );
         }
-        Ok(())
     }
     #[doc = crate::man_link!(vkCmdDispatchIndirect)]
-    pub fn dispatch_indirect(
-        &mut self, buffer: &'pool Buffer, offset: u64,
-    ) -> Result<()> {
-        self.compute.check()?;
+    pub fn dispatch_indirect(&mut self, buffer: &'pool Buffer, offset: u64) {
+        self.compute.check();
         unsafe {
             (self.device.fun().cmd_dispatch_indirect)(
                 self.buffer.handle_mut(),
@@ -343,7 +336,6 @@ impl<'rec, 'pool> CommandRecording<'rec, 'pool> {
                 offset,
             );
         }
-        Ok(())
     }
 }
 
@@ -357,13 +349,14 @@ impl<'rec, 'pool> ExternalRenderPassRecording<'rec, 'pool> {
     #[doc = crate::man_link!(vkCmdExecuteCommands)]
     pub fn execute_commands(
         &mut self, commands: &mut [&'pool mut SecondaryCommandBuffer],
-    ) -> Result<()> {
+    ) {
         let mut handles = bumpalo::vec![in &self.rec.pool.scratch];
         for command in commands.iter_mut() {
-            if !self.pass.compatible(command.pass.as_deref().unwrap())
-                || self.subpass != command.subpass
-            {
-                return Err(Error::InvalidArgument);
+            if !self.pass.compatible(command.pass.as_deref().unwrap()) {
+                panic!("Command not compatible with current render pass")
+            }
+            if self.subpass != command.subpass {
+                panic!("Wrong subpass for command")
             }
             handles.push(command.borrow_mut());
         }
@@ -372,10 +365,8 @@ impl<'rec, 'pool> ExternalRenderPassRecording<'rec, 'pool> {
             (self.rec.device.fun().cmd_execute_commands)(
                 self.rec.buffer.handle_mut(),
                 handles.len() as u32,
-                Array::from_slice(&handles).ok_or(Error::InvalidArgument)?,
+                Array::from_slice(&handles).expect("No command buffers"),
             )
         }
-
-        Ok(())
     }
 }

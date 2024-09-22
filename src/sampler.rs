@@ -7,7 +7,6 @@
 // except according to those terms.
 
 use crate::device::Device;
-use crate::error::Result;
 use crate::types::*;
 
 #[derive(Debug, Eq)]
@@ -25,8 +24,8 @@ pub struct Sampler {
 
 impl Sampler {
     #[doc = crate::man_link!(vkCreateSampler)]
-    pub fn new(device: &Device, info: &SamplerCreateInfo) -> Result<Self> {
-        device.increment_sampler_alloc_count()?;
+    pub fn new(device: &Device, info: &SamplerCreateInfo) -> Self {
+        device.increment_sampler_alloc_count();
         let mut handle = None;
         let result = unsafe {
             (device.fun().create_sampler)(
@@ -36,15 +35,15 @@ impl Sampler {
                 &mut handle,
             )
         };
-        if result.is_err() {
+        if !result.is_success() {
             device.decrement_sampler_alloc_count();
-            result?
+            result.unwrap();
         }
         let inner = Arc::new(SamplerInner {
             handle: handle.unwrap(),
             device: device.clone(),
         });
-        Ok(Self { inner })
+        Self { inner }
     }
 }
 

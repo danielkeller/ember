@@ -7,7 +7,6 @@
 // except according to those terms.
 
 use crate::device::Device;
-use crate::error::{Error, Result};
 use crate::ffi::Array;
 use crate::types::*;
 
@@ -20,9 +19,9 @@ pub struct ShaderModule {
 
 impl ShaderModule {
     #[doc = crate::man_link!(vkCreateShaderModule)]
-    pub fn new(device: &Device, code: &[u32]) -> Result<Self> {
+    pub fn new(device: &Device, code: &[u32]) -> Self {
         if code.is_empty() {
-            return Err(Error::InvalidArgument);
+            panic!("Shader code is empty")
         }
         let mut handle = None;
         unsafe {
@@ -37,9 +36,10 @@ impl ShaderModule {
                 },
                 None,
                 &mut handle,
-            )?;
+            )
+            .unwrap();
         }
-        Ok(Self { handle: handle.unwrap(), device: device.clone() })
+        Self { handle: handle.unwrap(), device: device.clone() }
     }
 }
 
